@@ -25,6 +25,8 @@ export const api = {
   getProposal: (path) => request(`/api/proposals/${encodePath(path)}`),
   listComments: (path) => request(`/api/comments?proposal=${encodeURIComponent(path)}`),
   addComment: (comment) => request('/api/comments', { method: 'POST', body: JSON.stringify(comment) }),
+  resolveComment: (id, resolved, by) =>
+    request(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ resolved, by }) }),
   deleteComment: (id) => request(`/api/comments/${id}`, { method: 'DELETE' }),
 }
 

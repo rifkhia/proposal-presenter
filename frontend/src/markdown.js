@@ -43,6 +43,20 @@ md.core.ruler.push('heading_ids', (state) => {
   }
 })
 
+// Tag every rendered block with the source lines it came from (1-based,
+// inclusive), so inline comments can be anchored to "line 12" and found again.
+md.core.ruler.push('source_lines', (state) => {
+  const src = state.src.split('\n')
+  for (const token of state.tokens) {
+    if (!token.map || token.nesting < 0 || token.hidden || token.type === 'inline') continue
+    const start = token.map[0] + 1
+    let end = token.map[1]
+    while (end > start && !src[end - 1]?.trim()) end-- // markdown-it includes trailing blank lines
+    token.attrSet('data-line', String(start))
+    token.attrSet('data-line-end', String(end))
+  }
+})
+
 const defaultImage = md.renderer.rules.image
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx]

@@ -29,7 +29,7 @@ const filtered = computed(() => {
       )
     : [...proposals.value]
   if (sort.value === 'title') list.sort((a, b) => a.title.localeCompare(b.title))
-  else if (sort.value === 'comments') list.sort((a, b) => b.comment_count - a.comment_count)
+  else if (sort.value === 'comments') list.sort((a, b) => b.open_threads - a.open_threads || b.comment_count - a.comment_count)
   return list
 })
 
@@ -50,7 +50,7 @@ onMounted(load)
         <select v-model="sort" aria-label="Sort by">
           <option value="recent">Recently updated</option>
           <option value="title">Title</option>
-          <option value="comments">Most comments</option>
+          <option value="comments">Most open comments</option>
         </select>
         <button class="btn" @click="load" :disabled="loading" title="Reload list">Refresh</button>
       </div>
@@ -80,7 +80,8 @@ onMounted(load)
           <p v-if="p.excerpt" class="excerpt">{{ p.excerpt }}</p>
           <div class="card-meta muted">
             <span :title="fullDate(p.modified)">Updated {{ timeAgo(p.modified) }}</span>
-            <span class="comment-count" :class="{ has: p.comment_count }">
+            <span class="comment-count" :title="`${p.comment_count} comments, ${p.open_threads} open threads`">
+              <span v-if="p.open_threads" class="open-pill">{{ p.open_threads }} open</span>
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h11A1.5 1.5 0 0 1 17 4.5v8a1.5 1.5 0 0 1-1.5 1.5H8l-4 3v-3h0A1.5 1.5 0 0 1 3 12.5z" />
               </svg>

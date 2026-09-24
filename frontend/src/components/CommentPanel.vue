@@ -1,59 +1,44 @@
 <script setup>
-import { nextTick, ref, watch } from 'vue'
-import { api } from '../api'
-import { fullDate, timeAgo } from '../format'
+import { computed, nextTick, ref, watch } from 'vue'
+import { author } from '../author'
+import { lineLabel } from '../anchors'
+import CommentThread from './CommentThread.vue'
 
-const props = defineProps({ path: { type: String, required: true } })
-const quote = defineModel('quote', { type: String, default: '' })
+const props = defineProps({
+  store: { type: Object, required: true },
+  activeId: { type: Number, default: null },
+  pending: { type: Object, default: null },
+  outdatedIds: { type: Set, required: true },
+})
+const emit = defineEmits(['activate', 'clear-pending', 'posted'])
 
-const AUTHOR_KEY = 'proposal-presenter:author'
-const readAuthor = () => {
-  try {
-    return localStorage.getItem(AUTHOR_KEY) || ''
-  } catch {
-    return ''
-  }
-}
-
-const comments = ref([])
-const loading = ref(true)
-const error = ref('')
-const author = ref(readAuthor())
+const tab = ref('open')
 const body = ref('')
 const submitting = ref(false)
+const error = ref('')
+const nameError = ref(false)
 const textarea = ref(null)
+const nameInput = ref(null)
+const list = ref(null)
 
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    comments.value = await api.listComments(props.path)
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
+const visible = computed(() => (tab.value === 'open' ? props.store.open : props.store.resolved))
+const total = computed(() => props.store.threads.reduce((n, t) => n + 1 + t.replies.length, 0))
+
+function needName() {
+  nameError.value = true
+  nameInput.value?.focus()
 }
 
 async function submit() {
-  if (!author.value.trim() || !body.value.trim()) return
+  if (!body.value.trim()) return
+  if (!author.value.trim()) return needName()
   submitting.value = true
   error.value = ''
   try {
-    const created = await api.addComment({
-      proposal: props.path,
-      author: author.value,
-      body: body.value,
-      quote: quote.value || null,
-    })
-    comments.value.push(created)
+    const created = await props.store.addThread({ author: author.value, body: body.value, anchor: props.pending })
     body.value = ''
-    quote.value = ''
-    try {
-      localStorage.setItem(AUTHOR_KEY, author.value.trim())
-    } catch {
-      // storage unavailable (private mode); the name just won't be remembered
-    }
+    tab.value = 'open'
+    emit('posted', created)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -61,78 +46,95 @@ async function submit() {
   }
 }
 
-async function remove(comment) {
-  if (!confirm(`Delete this comment by ${comment.author}?`)) return
-  try {
-    await api.deleteComment(comment.id)
-    comments.value = comments.value.filter((c) => c.id !== comment.id)
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
 function onKeydown(event) {
   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) submit()
 }
 
-async function focus() {
+async function focusComposer() {
   await nextTick()
-  textarea.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  textarea.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   textarea.value?.focus({ preventScroll: true })
 }
 
-defineExpose({ focus })
-watch(() => props.path, load, { immediate: true })
+// Bring a thread into view, switching to the tab it's on.
+async function showThread(id) {
+  const thread = id && props.store.find(id)
+  if (!thread) return
+  tab.value = thread.resolved ? 'resolved' : 'open'
+  await nextTick()
+  list.value?.querySelector(`[data-thread="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+watch(() => props.activeId, showThread)
+watch(author, (name) => name.trim() && (nameError.value = false))
+
+defineExpose({ focusComposer })
 </script>
 
 <template>
   <aside class="comments">
-    <h2>
-      Comments <span class="count">{{ comments.length }}</span>
-    </h2>
+    <div class="panel-head">
+      <h2>Comments <span class="count">{{ total }}</span></h2>
+      <div class="tabs" role="tablist">
+        <button role="tab" :aria-selected="tab === 'open'" :class="{ on: tab === 'open' }" @click="tab = 'open'">
+          Open <span class="count">{{ store.open.length }}</span>
+        </button>
+        <button role="tab" :aria-selected="tab === 'resolved'" :class="{ on: tab === 'resolved' }" @click="tab = 'resolved'">
+          Resolved <span class="count">{{ store.resolved.length }}</span>
+        </button>
+      </div>
+    </div>
 
-    <p v-if="loading" class="muted">Loading comments...</p>
-    <p v-else-if="comments.length === 0" class="muted">No comments yet. Be the first.</p>
-
-    <ol v-else class="comment-list">
-      <li v-for="c in comments" :key="c.id" class="comment">
-        <div class="comment-head">
-          <span class="avatar" aria-hidden="true">{{ c.author.charAt(0).toUpperCase() }}</span>
-          <strong>{{ c.author }}</strong>
-          <span class="muted" :title="fullDate(c.created_at)">{{ timeAgo(c.created_at) }}</span>
-          <button class="link-btn" @click="remove(c)" title="Delete comment">Delete</button>
-        </div>
-        <blockquote v-if="c.quote" class="comment-quote">{{ c.quote }}</blockquote>
-        <p class="comment-body">{{ c.body }}</p>
-      </li>
-    </ol>
+    <label class="name-field" :class="{ invalid: nameError }">
+      <span>Your name</span>
+      <input ref="nameInput" v-model="author" maxlength="100" placeholder="Required to comment" />
+    </label>
+    <p v-if="nameError" class="notice error small">Enter your name first.</p>
 
     <form class="comment-form" @submit.prevent="submit">
-      <div v-if="quote" class="quote-preview">
+      <div v-if="pending" class="quote-preview">
         <div class="quote-label">
-          Commenting on
-          <button type="button" class="link-btn" @click="quote = ''">Remove</button>
+          Commenting on {{ lineLabel(pending).toLowerCase() }}
+          <button type="button" class="link-btn" @click="emit('clear-pending')">Cancel</button>
         </div>
-        <blockquote class="comment-quote">{{ quote }}</blockquote>
+        <blockquote v-if="pending.quote" class="comment-quote">{{ pending.quote }}</blockquote>
       </div>
-      <input v-model="author" placeholder="Your name" maxlength="100" required aria-label="Your name" />
       <textarea
         ref="textarea"
         v-model="body"
-        rows="4"
+        rows="3"
         maxlength="5000"
-        placeholder="Write a comment..."
-        required
+        :placeholder="pending ? 'Comment on this passage...' : 'Leave a general comment...'"
         aria-label="Comment"
         @keydown="onKeydown"
       />
-      <p v-if="error" class="notice error">{{ error }}</p>
+      <p v-if="error" class="notice error small">{{ error }}</p>
       <div class="form-actions">
         <span class="muted small">Ctrl/⌘ + Enter to post</span>
-        <button class="btn btn-primary" :disabled="submitting || !author.trim() || !body.trim()">
+        <button class="btn btn-primary" :disabled="submitting || !body.trim()">
           {{ submitting ? 'Posting...' : 'Post comment' }}
         </button>
       </div>
     </form>
+
+    <p v-if="store.error" class="notice error small">Could not load comments: {{ store.error }}</p>
+    <p v-else-if="store.loading" class="muted">Loading comments...</p>
+    <p v-else-if="!visible.length" class="muted empty-list">
+      {{ tab === 'open' ? 'No open comments.' : 'No resolved comments.' }}
+    </p>
+
+    <div ref="list" class="thread-list">
+      <CommentThread
+        v-for="t in visible"
+        :key="t.id"
+        :thread="t"
+        :store="store"
+        :active="t.id === activeId"
+        :outdated="outdatedIds.has(t.id)"
+        @activate="emit('activate', $event)"
+        @need-name="needName"
+        @reopened="showThread"
+      />
+    </div>
   </aside>
 </template>

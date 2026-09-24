@@ -1,6 +1,12 @@
 # proposal-presenter
 
-A small web app for sharing proposals written in Markdown. It lists every `.md` file in a folder; click one to read it rendered and leave comments. Select any text in a proposal to comment on that specific passage.
+A small web app for sharing proposals written in Markdown. It lists every `.md` file in a folder. Click one to read it and discuss it in comment threads, the way you'd review a pull request on GitHub or Bitbucket.
+
+- **Inline comments:** select text, or hover a block and click **+**, to comment on that passage. Each inline thread shows the source line it refers to (for example `Line 12` or `Lines 17–21`). Click it to jump to the passage, which is then highlighted.
+- **Rendered / Source toggle:** Source shows the raw Markdown with line numbers. Click a line number to comment on that line, or shift-click a second one to comment on a range.
+- **Replies and resolving:** reply to any thread, and resolve it when it's settled. Resolved threads move to the *Resolved* tab and can be reopened.
+- **Shareable links:** *Copy link* on a thread gives a URL (`?thread=12`) that opens the proposal with that thread selected.
+- **Outdated threads:** if the proposal is edited and the quoted text disappears, the thread is marked *Outdated* and keeps its original line.
 
 - **Frontend:** Vue 3 + Vite, served by nginx
 - **Backend:** Python (FastAPI), comments stored in SQLite
@@ -106,6 +112,8 @@ No restart is needed. Files are read from disk on every request, so just refresh
 - `proposals/example-proposal.md` is a sample. Delete it once you've added your own.
 
 > Comments are tied to a proposal's file path. Renaming or moving a file starts it with no comments. Moving it back brings them back.
+>
+> Inline threads store the quoted text and its source line numbers. After you edit a proposal, a thread still finds its passage as long as the quoted text is still there, even if it moved to other lines.
 
 ## Configuration (`.env`)
 
@@ -169,10 +177,11 @@ npm run dev
 
 | Method   | Path                          | Description                                               |
 |----------|-------------------------------|-----------------------------------------------------------|
-| `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, comment count) |
+| `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, comment count, open threads) |
 | `GET`    | `/api/proposals/{path}`       | Raw Markdown and metadata for one proposal                |
 | `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar)      |
-| `GET`    | `/api/comments?proposal=...`  | Comments for a proposal                                   |
-| `POST`   | `/api/comments`               | `{proposal, author, body, quote?}`                        |
-| `DELETE` | `/api/comments/{id}`          | Delete a comment                                          |
+| `GET`    | `/api/comments?proposal=...`  | Threads for a proposal, each with its `replies`           |
+| `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?}`, or reply with `{proposal, author, body, parent_id}` |
+| `PATCH`  | `/api/comments/{id}`          | Resolve or reopen a thread: `{resolved, by?}`             |
+| `DELETE` | `/api/comments/{id}`          | Delete a reply, or a thread together with its replies     |
 | `GET`    | `/api/health`                 | Health check                                              |
