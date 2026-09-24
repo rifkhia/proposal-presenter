@@ -1,0 +1,65 @@
+# Deployment compose file for the VM — runs the images published by
+# .github/workflows/deploy.yml, and lets Watchtower keep them up to date.
+#
+#   cd /opt/proposal-presenter
+#   docker-compose -f docker-compose.deploy.yml up -d
+#
+# `name:` pins the compose project to proposal-presenter, the same as
+# docker-compose.yml, so both files drive the same containers and the same
+# comments volume. Don't run this file with --build: it has nothing to build.
+name: proposal-presenter
+
+services:
+  backend:
+    image: ghcr.io/rifkhia/proposal-presenter-backend:latest
+    pull_policy: always
+    # always, not unless-stopped: podman-restart.service only restarts
+    # restart-policy=always containers after a reboot.
+    restart: always
+    environment:
+      PROPOSALS_DIR: /proposals
+      DATA_DIR: /data
+    volumes:
+      # Markdown files are read live from this host folder: add/edit files, then refresh the page.
+      - ${PROPOSALS_PATH:-./proposals}:/proposals:ro
+      # Comments database (SQLite). Survives image updates and recreates.
+      - comments-data:/data
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  frontend:
+    image: ghcr.io/rifkhia/proposal-presenter-frontend:latest
+    pull_policy: always
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "${APP_PORT:-8080}:80"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  # Polls GHCR and recreates the labelled containers when a new image lands.
+  # The VM is behind the VPN, so GitHub cannot reach in — the VM has to pull.
+  #
+  # Only ONE Watchtower may run per host: on start, Watchtower stops every other
+  # instance it can see, and an unscoped one acts on all labelled containers
+  # anyway. vmw4-raprustandi already runs one (simple-placement-providers-watchtower-1)
+  # that picks up the labels above, so this service sits behind a profile and is
+  # NOT started by default. On a host without Watchtower, start it with:
+  #   docker-compose -f docker-compose.deploy.yml --profile watchtower up -d
+  watchtower:
+    image: docker.io/containrrr/watchtower:1.7.1
+    profiles: [watchtower]
+    restart: always
+    volumes:
+      # Rootful podman's Docker-compatible API — how Watchtower drives podman.
+      # On a real Docker host use /var/run/docker.sock:/var/run/docker.sock.
+      - /run/podman/podman.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"   # only touch containers labelled above
+      WATCHTOWER_CLEANUP: "true"        # drop the superseded image — disk is tight
+      WATCHTOWER_POLL_INTERVAL: "120"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+
+volumes:
+  comments-data:
