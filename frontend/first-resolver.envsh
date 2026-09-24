@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs after the image's 15-local-resolvers.envsh. Keep only the first nameserver
+# (the container network's DNS). Hosts often list extra ones (e.g. corporate DNS)
+# that can't resolve compose service names, and nginx round-robins across all of
+# them, which would make "backend" lookups fail intermittently.
+export NGINX_LOCAL_RESOLVERS="${NGINX_LOCAL_RESOLVERS%% *}"

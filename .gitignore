@@ -1,0 +1,13 @@
+.env
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+data/
+.DS_Store
+
+# Proposals are added directly on the server, not committed.
+proposals/*
+!proposals/.gitkeep
+!proposals/example-proposal.md

@@ -1,0 +1,27 @@
+name: proposal-presenter
+
+services:
+  backend:
+    build: ./backend
+    image: proposal-presenter-backend
+    restart: always
+    environment:
+      PROPOSALS_DIR: /proposals
+      DATA_DIR: /data
+    volumes:
+      # Markdown files are read live from this host folder: add/edit files, then refresh the page.
+      - ${PROPOSALS_PATH:-./proposals}:/proposals:ro
+      # Comments database (SQLite).
+      - comments-data:/data
+
+  frontend:
+    build: ./frontend
+    image: proposal-presenter-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "${APP_PORT:-8080}:80"
+
+volumes:
+  comments-data:
