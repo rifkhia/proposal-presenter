@@ -79,29 +79,42 @@ How it's wired:
 - The app container is published on loopback only (`APP_PORT=127.0.0.1:8080` in `.env`), so there is no plain-HTTP way in, and the editor password always travels encrypted.
 - Port 80 on this host belongs to simple-placement-providers and isn't touched.
 
-| File | What |
+**Certificate: a private CA that only covers this hostname.** Company laptops don't necessarily trust the OpenWay Group CA (this Mac has none of its certificates), and the VM isn't reachable for Let's Encrypt. So the server certificate is signed by a small private CA, `proposal-presenter local CA (vmw4-raprustandi)`, which you install once per device. The CA carries a critical *name constraint* limiting it to `vmw4-raprustandi.cdt.spb.openwaygroup.com`, so trusting it can't be abused to impersonate any other site: a certificate it signs for another name fails with "permitted subtree violation".
+
+A self-signed certificate with a "click to proceed" warning is **not** an option on this host. Chrome already has an HSTS record for this hostname, most likely from the Vault UI that ran here on `:8200`, and HSTS forbids clicking through certificate errors.
+
+**Install the CA once per device** (the file is [`certs/proposal-presenter-ca.crt`](certs/proposal-presenter-ca.crt)). Then fully quit and reopen the browser.
+
+- **macOS:**
+  ```bash
+  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/proposal-presenter-ca.crt
+  ```
+- **Windows:** double-click the file, choose *Install Certificate*, then *Current User*, then *Place all certificates in: Trusted Root Certification Authorities*.
+- **Linux (Chrome):**
+  ```bash
+  certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n proposal-presenter-ca -i certs/proposal-presenter-ca.crt
+  ```
+
+SHA-256 fingerprint to check against: `5E:86:74:F6:5F:17:6A:3A:9D:78:94:88:15:D7:7E:61:A0:DE:45:21:75:82:79:DC:6A:74:8D:92:DA:FF:32:71`.
+
+| File on the VM (`/etc/pki/nginx/`) | What |
 |---|---|
-| `/etc/pki/nginx/private/vmw4-raprustandi.key` | Private key (root only). Keep it; the company certificate reuses it. |
-| `/etc/pki/nginx/vmw4-raprustandi.crt` | The certificate nginx serves. **Currently self-signed**, valid one year. |
-| `/etc/pki/nginx/vmw4-raprustandi.csr` | Certificate request for the OpenWay Group CA, made from the same key. |
+| `private/vmw4-raprustandi.key` | Server key (root only) |
+| `vmw4-raprustandi.crt` | Server certificate nginx serves, signed by the local CA, valid until Oct 2027 |
+| `vmw4-raprustandi.csr` | Certificate request for the same key, in case IT issues an OpenWay certificate later |
+| `local-ca.crt`, `private/local-ca.key` | The local CA, valid until Sep 2031. Keep the key root-only; it's what signs renewals |
+| `local-ca.cnf`, `leaf.ext` | The settings the CA and the server certificate were made with |
 
-**Getting rid of the browser warning.** A self-signed certificate makes browsers warn once per device. To use a certificate your company's machines already trust:
-
-1. Send `vmw4-raprustandi.csr` to IT. Ask for a TLS server certificate from the OpenWay Group CA (the *Web Services CA*) for `vmw4-raprustandi.cdt.spb.openwaygroup.com`.
-2. Replace `/etc/pki/nginx/vmw4-raprustandi.crt` with what they return, in PEM format: the server certificate first, then any intermediate CA certificates. The key doesn't change.
-3. Run `nginx -t && systemctl reload nginx`.
-4. Uncomment the `Strict-Transport-Security` line in the nginx config and reload again. Only do this once the certificate is trusted: with HSTS, browsers won't let anyone click through a certificate warning.
-
-**Recreating the key, CSR and self-signed certificate** (for example, before the self-signed one expires):
+**Renewing the server certificate** before it expires. Devices keep trusting the CA, so nobody reinstalls anything:
 
 ```bash
-cd /etc/pki/nginx && H=vmw4-raprustandi.cdt.spb.openwaygroup.com
-openssl req -new -newkey rsa:2048 -nodes -keyout private/vmw4-raprustandi.key -out vmw4-raprustandi.csr \
-  -subj "/CN=$H" -addext "subjectAltName=DNS:$H"
-openssl req -x509 -key private/vmw4-raprustandi.key -out vmw4-raprustandi.crt -days 365 \
-  -subj "/CN=$H" -addext "subjectAltName=DNS:$H"
-chmod 600 private/vmw4-raprustandi.key && nginx -t && systemctl reload nginx
+cd /etc/pki/nginx
+openssl x509 -req -sha256 -days 397 -in vmw4-raprustandi.csr -CA local-ca.crt -CAkey private/local-ca.key \
+  -CAserial local-ca.srl -extfile leaf.ext -out vmw4-raprustandi.crt
+nginx -t && systemctl reload nginx
 ```
+
+**Switching to an OpenWay certificate instead** (only worth it once every device trusts the OpenWay Group Root CA): send `vmw4-raprustandi.csr` to IT, put the returned certificate followed by its intermediates into `vmw4-raprustandi.crt`, and reload nginx.
 
 ### Updating a deployment
 
@@ -244,7 +257,7 @@ Sign-in details:
 - The password is checked against a PBKDF2-SHA256 hash (600,000 iterations).
 - Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies. The signing key lives in the data volume and is mixed with the password hash, so changing the password invalidates every session.
 - The app is only reachable over HTTPS (see [HTTPS](#https)), and the session cookie is marked `Secure`.
-- Until the certificate is signed by the company CA, the browser warning means users can't tell the real server from an impostor. Get the signed certificate (steps above) rather than training people to click through warnings.
+- The certificate comes from a private CA that is name-constrained to this one hostname (see [HTTPS](#https)). Installing that CA on a device lets it verify this server, and nothing else.
 - The sign-in lockout counts failures per client address. The app's nginx takes that address from the `X-Real-IP` header only when the request comes from loopback or a container bridge network (a proxy on the same host), so clients can't fake it.
 
 ## Troubleshooting
