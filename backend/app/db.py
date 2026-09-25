@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS comments (
     resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_comments_proposal ON comments (proposal);
+
+-- Last version of each proposal the server has seen; see anchoring.py.
+CREATE TABLE IF NOT EXISTS snapshots (
+    proposal    TEXT PRIMARY KEY,
+    version     TEXT NOT NULL,
+    content     TEXT NOT NULL
+);
 """
 
 # Columns added after the first release. Databases created before them get the

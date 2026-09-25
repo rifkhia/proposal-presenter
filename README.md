@@ -6,7 +6,8 @@ A small web app for sharing proposals written in Markdown. It lists every `.md` 
 - **Rendered / Source toggle:** Source shows the raw Markdown with line numbers. Click a line number to comment on that line, or shift-click a second one to comment on a range.
 - **Replies and resolving:** reply to any thread, and resolve it when it's settled. Resolved threads move to the *Resolved* tab and can be reopened.
 - **Shareable links:** *Copy link* on a thread gives a URL (`?thread=12`) that opens the proposal with that thread selected.
-- **Outdated threads:** if the proposal is edited and the quoted text disappears, the thread is marked *Outdated* and keeps its original line.
+- **Editing in the browser:** editors sign in with a shared password and edit the Markdown directly (see [Editing](#editing)). The editor highlights lines that have comments. As you type, the comment markers move with the text, and hovering a marker shows the comment.
+- **Comments follow edits:** when a proposal changes, whether edited in the app or replaced on disk, each comment's line numbers move with its text. A thread whose quoted text is gone is marked *Outdated*.
 
 - **Frontend:** Vue 3 + Vite, served by nginx
 - **Backend:** Python (FastAPI), comments stored in SQLite
@@ -111,18 +112,71 @@ No restart is needed. Files are read from disk on every request, so just refresh
 - Hidden files and folders (starting with `.`) are ignored.
 - `proposals/example-proposal.md` is a sample. Delete it once you've added your own.
 
-> Comments are tied to a proposal's file path. Renaming or moving a file starts it with no comments. Moving it back brings them back.
->
-> Inline threads store the quoted text and its source line numbers. After you edit a proposal, a thread still finds its passage as long as the quoted text is still there, even if it moved to other lines.
+> Comments are tied to a proposal's file path. Replacing a file under the **same name** keeps its comments, and their line numbers follow the text (see [How comments follow edits](#how-comments-follow-edits)). A **new name**, for example `plan-v2.md`, starts with no comments. The old ones stay with `plan.md` and come back if that file returns.
 
 ## Configuration (`.env`)
 
 | Variable         | Default       | Meaning                                                  |
 |------------------|---------------|----------------------------------------------------------|
 | `APP_PORT`       | `8080`        | Host port the app is published on                        |
-| `PROPOSALS_PATH` | `./proposals` | Host folder with the Markdown files (mounted read-only)  |
+| `PROPOSALS_PATH` | `./proposals` | Host folder with the Markdown files                      |
+| `EDIT_PASSWORD_HASH` | *(empty)* | Hash of the editor password. Empty means editing is off (see [Editing](#editing)) |
 
-After changing `.env`, run `docker-compose -f docker-compose.deploy.yml up -d` on the VM.
+After changing `.env`, run `docker-compose -f docker-compose.deploy.yml up -d` on the VM. Watchtower only swaps images; it never picks up `.env` or compose-file changes.
+
+## Editing
+
+Editing is **off** until you set a password. There is one shared editor password, and the server only ever stores a hash of it.
+
+**1. Generate the hash.** You type the password twice; only the hash is printed.
+
+```bash
+cd /opt/proposal-presenter
+docker-compose -f docker-compose.deploy.yml run --rm --no-deps backend python -m app.hashpw
+```
+
+**2. Put the hash in `.env`** next to the compose file. Paste it as-is, without quotes:
+
+```
+EDIT_PASSWORD_HASH=pbkdf2_sha256:600000:<salt>:<hash>
+```
+
+**3. Let the app write to the proposals folder.** The backend runs as uid 10001, and saving replaces the file through a temp file in the same folder:
+
+```bash
+chown -R 10001:10001 /opt/proposal-presenter/proposals
+```
+
+Files you later copy in as root stay editable. Saving only needs the *folder* to be writable, not the file. A subfolder you create yourself needs the same `chown`. Until then, the Edit button is greyed out on proposals in that folder.
+
+**4. Apply:** run `docker-compose -f docker-compose.deploy.yml up -d`.
+
+To change the password, repeat steps 1, 2 and 4. Changing it signs everyone out.
+
+### How editing works
+
+- Click **Edit** on a proposal and enter the password. You stay signed in for 12 hours (HttpOnly cookie).
+- After 5 wrong passwords, sign-in from that address is blocked for 5 minutes.
+- Lines with open comments are highlighted, with a bubble in the margin:
+  - Hover a bubble to read the comment; click it to open the thread in the panel.
+  - While you type, the bubbles move with the text, and the panel's chips show the live position, for example `Line 9 (was 7)`.
+  - An orange bubble means you changed a commented line.
+- **Ctrl/⌘ + S** saves.
+- If someone else saved, or the file changed on disk, since you started editing, you're asked whether to overwrite their version or discard yours.
+
+### How comments follow edits
+
+The server keeps a copy of the last version of each proposal it served. When the file on disk differs from that copy, whether saved in the app or replaced over `scp`, it compares the two versions line by line and moves each thread:
+
+| Commented lines... | Thread moves to... |
+|---|---|
+| unchanged, but lines were added or removed above | the same text at its new line numbers |
+| rewritten | the rewritten lines |
+| deleted | the line after the deletion |
+
+A thread whose quoted text no longer appears anywhere is labelled *Outdated* and keeps its quote for context. After a save, the app tells you how many threads moved and how many are on lines you changed.
+
+The line comparison needs the server to have seen the previous version. If a file is replaced twice before anyone opens it, the comparison runs from the last version it saw, which is still correct. The only case it can't follow is a file that already differed from its comments before this feature was deployed. Those threads still find their passage by quoted text in the Rendered view.
 
 ## Operations
 
@@ -150,13 +204,20 @@ $DC cp ./comments-backup.db backend:/data/comments.db && $DC restart backend
 
 ## Security note
 
-The app has no login. Anyone who can reach the port can read proposals, post comments, and delete comments. Keep it on an internal network or VPN, or put it behind a reverse proxy with authentication.
+Reading and commenting are open: anyone who can reach the port can read proposals, post, resolve and delete comments. Only **editing proposals** needs the editor password. Keep the app on an internal network or VPN.
+
+Sign-in details:
+- The password is checked against a PBKDF2-SHA256 hash (600,000 iterations).
+- Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies. The signing key lives in the data volume and is mixed with the password hash, so changing the password invalidates every session.
+- The app is served over plain HTTP on port 8080, so the password travels unencrypted on your network. Put it behind HTTPS if that network isn't trusted. The cookie is marked `Secure` automatically when the request arrives over HTTPS.
 
 ## Troubleshooting
 
 - **Proposals don't show up:** the container runs as a non-root user (uid 10001) and needs read access. Run `chmod -R a+rX proposals/`.
-- **SELinux hosts (RHEL, CentOS, Fedora)** may block the bind mount. Change the volume line in `docker-compose.yml` to `${PROPOSALS_PATH:-./proposals}:/proposals:ro,z`.
+- **SELinux hosts (RHEL, CentOS, Fedora)** may block the bind mount. Add `:z` to the volume line in the compose file: `${PROPOSALS_PATH:-./proposals}:/proposals:z`.
 - **Port already in use:** set another `APP_PORT` in `.env`.
+- **Edit button missing:** `EDIT_PASSWORD_HASH` isn't set, or wasn't applied with `up -d`. `docker-compose -f docker-compose.deploy.yml logs backend` shows the reason on startup; a malformed hash is logged as an error.
+- **Edit button greyed out:** the proposal's folder isn't writable by uid 10001. See step 3 under [Editing](#editing).
 
 ## Local development
 
@@ -178,10 +239,14 @@ npm run dev
 | Method   | Path                          | Description                                               |
 |----------|-------------------------------|-----------------------------------------------------------|
 | `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, comment count, open threads) |
-| `GET`    | `/api/proposals/{path}`       | Raw Markdown and metadata for one proposal                |
+| `GET`    | `/api/proposals/{path}`       | Raw Markdown and metadata (`version`, `writable`) for one proposal |
+| `PUT`    | `/api/proposals/{path}`       | Save (editor only): `{content, base_version, force?}`. Returns 409 if the file changed since `base_version` |
 | `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar)      |
 | `GET`    | `/api/comments?proposal=...`  | Threads for a proposal, each with its `replies`           |
-| `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?}`, or reply with `{proposal, author, body, parent_id}` |
+| `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?, version?}`, or reply with `{proposal, author, body, parent_id}`. An inline thread made against an old `version` gets 409 |
 | `PATCH`  | `/api/comments/{id}`          | Resolve or reopen a thread: `{resolved, by?}`             |
 | `DELETE` | `/api/comments/{id}`          | Delete a reply, or a thread together with its replies     |
+| `GET`    | `/api/auth`                   | `{enabled, signed_in}`                                    |
+| `POST`   | `/api/auth/login`             | `{password}`; sets the session cookie                     |
+| `POST`   | `/api/auth/logout`            | Clears the session cookie                                 |
 | `GET`    | `/api/health`                 | Health check                                              |

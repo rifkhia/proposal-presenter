@@ -5,7 +5,7 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    client_max_body_size 1m;
+    client_max_body_size 5m; # saving a proposal sends the whole file
 
     # Re-resolve "backend" at request time (container DNS from /etc/resolv.conf),
     # so restarting/rebuilding the backend container doesn't leave nginx on a stale IP.

@@ -38,6 +38,7 @@ export function useComments(path) {
       quote: anchor?.quote || null,
       line_start: anchor?.line_start ?? null,
       line_end: anchor?.line_end ?? null,
+      version: anchor?.version ?? null,
     })
     threads.value.push(created)
     return created

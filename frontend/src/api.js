@@ -12,7 +12,9 @@ async function request(url, options = {}) {
     } catch {
       // non-JSON error body; keep the status text
     }
-    throw new Error(message)
+    const error = new Error(message)
+    error.status = res.status
+    throw error
   }
   return res.status === 204 ? null : res.json()
 }
@@ -23,6 +25,14 @@ const encodePath = (path) => path.split('/').map(encodeURIComponent).join('/')
 export const api = {
   listProposals: () => request('/api/proposals'),
   getProposal: (path) => request(`/api/proposals/${encodePath(path)}`),
+  saveProposal: (path, content, baseVersion, force = false) =>
+    request(`/api/proposals/${encodePath(path)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content, base_version: baseVersion, force }),
+    }),
+  authStatus: () => request('/api/auth'),
+  signIn: (password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
+  signOut: () => request('/api/auth/logout', { method: 'POST' }),
   listComments: (path) => request(`/api/comments?proposal=${encodeURIComponent(path)}`),
   addComment: (comment) => request('/api/comments', { method: 'POST', body: JSON.stringify(comment) }),
   resolveComment: (id, resolved, by) =>

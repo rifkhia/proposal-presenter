@@ -9,6 +9,7 @@ const props = defineProps({
   activeId: { type: Number, default: null },
   pending: { type: Object, default: null },
   outdatedIds: { type: Set, required: true },
+  liveLines: { type: Map, default: null },
 })
 const emit = defineEmits(['activate', 'clear-pending', 'posted'])
 
@@ -131,6 +132,7 @@ defineExpose({ focusComposer })
         :store="store"
         :active="t.id === activeId"
         :outdated="outdatedIds.has(t.id)"
+        :live="liveLines?.get(t.id) ?? null"
         @activate="emit('activate', $event)"
         @need-name="needName"
         @reopened="showThread"

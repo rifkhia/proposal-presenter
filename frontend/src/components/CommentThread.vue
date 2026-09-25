@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { author } from '../author'
 import { lineLabel } from '../anchors'
 import { fullDate, timeAgo } from '../format'
@@ -10,11 +10,18 @@ const props = defineProps({
   store: { type: Object, required: true },
   active: { type: Boolean, default: false },
   outdated: { type: Boolean, default: false },
+  // While editing: where the thread's lines are in the unsaved text.
+  live: { type: Object, default: null },
   // A callback rather than an event: reopening moves the thread off the Resolved
   // list, which unmounts this component, and Vue drops events from unmounted ones.
   onReopened: { type: Function, default: null },
 })
 const emit = defineEmits(['activate', 'need-name'])
+
+const moved = computed(
+  () => props.live && (props.live.line_start !== props.thread.line_start || props.live.line_end !== props.thread.line_end),
+)
+const wasLabel = computed(() => lineLabel(props.thread).replace(/^Lines? /, 'was '))
 
 const replying = ref(false)
 const replyBody = ref('')
@@ -97,7 +104,8 @@ function onKeydown(event) {
         @click="emit('activate', thread.id)"
       >
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12M2 8h12M2 13h7" /></svg>
-        {{ lineLabel(thread) }}
+        {{ lineLabel(moved ? live : thread) }}
+        <span v-if="moved" class="was">({{ wasLabel }})</span>
       </button>
       <span v-if="outdated" class="badge outdated">Outdated</span>
       <span v-if="thread.resolved" class="badge resolved-badge">Resolved</span>

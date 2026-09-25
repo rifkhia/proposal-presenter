@@ -1,10 +1,14 @@
 """Reads proposals straight from PROPOSALS_DIR on every request, so files
 dropped into the folder show up without restarting anything."""
 
+import contextlib
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .anchoring import version_of
 from .config import PROPOSALS_DIR
 
 _H1 = re.compile(r"^#\s+(.+?)\s*#*\s*$")
@@ -71,7 +75,7 @@ def list_proposals() -> list[dict]:
         rel = path.relative_to(PROPOSALS_DIR)
         if any(part.startswith(".") for part in rel.parts):
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = read_text(path)
         title, excerpt = _title_and_excerpt(text, _fallback_title(path))
         items.append(
             {
@@ -86,13 +90,43 @@ def list_proposals() -> list[dict]:
     return items
 
 
-def read_proposal(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8", errors="replace")
+def read_text(path: Path) -> str:
+    # Universal newlines: CRLF files read as LF, so line numbers and versions match
+    # what the browser sees.
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def is_writable(path: Path) -> bool:
+    # Saving replaces the file via a temp file in the same folder, so the folder
+    # (not the file) is what needs to be writable.
+    return os.access(path.parent, os.W_OK)
+
+
+def read_proposal(path: Path, text: str | None = None) -> dict:
+    text = read_text(path) if text is None else text
     rel = path.relative_to(PROPOSALS_DIR)
     title, _ = _title_and_excerpt(text, _fallback_title(path))
     return {
         "path": rel.as_posix(),
         "title": title,
         "modified": _iso_mtime(path),
+        "version": version_of(text),
+        "writable": is_writable(path),
         "content": text,
     }
+
+
+def write_proposal(path: Path, text: str) -> None:
+    """Atomically replace the file, keeping its permissions and line endings."""
+    newline = "\r\n" if b"\r\n" in path.read_bytes() else "\n"
+    mode = path.stat().st_mode & 0o777
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise

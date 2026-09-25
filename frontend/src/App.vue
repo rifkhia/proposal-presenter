@@ -1,3 +1,10 @@
+<script setup>
+import { onMounted } from 'vue'
+import { session } from './session'
+
+onMounted(() => session.refresh())
+</script>
+
 <template>
   <header class="topbar">
     <div class="topbar-inner">
@@ -8,6 +15,11 @@
         </svg>
         Proposal Presenter
       </RouterLink>
+      <div v-if="session.signedIn" class="session-pill">
+        <span class="dot" aria-hidden="true" />
+        Signed in as editor
+        <button class="link-btn" @click="session.signOut()">Sign out</button>
+      </div>
     </div>
   </header>
   <main>

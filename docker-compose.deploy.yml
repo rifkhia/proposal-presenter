@@ -19,9 +19,13 @@ services:
     environment:
       PROPOSALS_DIR: /proposals
       DATA_DIR: /data
+      # Hash of the editor password (python -m app.hashpw). Empty = editing disabled.
+      EDIT_PASSWORD_HASH: ${EDIT_PASSWORD_HASH:-}
     volumes:
       # Markdown files are read live from this host folder: add/edit files, then refresh the page.
-      - ${PROPOSALS_PATH:-./proposals}:/proposals:ro
+      # Writable so proposals can be edited in the app; the folder must be writable by
+      # uid 10001 for that (see README: Editing).
+      - ${PROPOSALS_PATH:-./proposals}:/proposals
       # Comments database (SQLite). Survives image updates and recreates.
       - comments-data:/data
     labels:
