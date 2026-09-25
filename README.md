@@ -31,7 +31,7 @@ push to main → Actions builds both images → GHCR (:latest, :<sha>)
 | Service    | Image                                          | Container                       | Host port |
 |------------|------------------------------------------------|---------------------------------|-----------|
 | `backend`  | `ghcr.io/rifkhia/proposal-presenter-backend`   | `proposal-presenter-backend-1`  | none      |
-| `frontend` | `ghcr.io/rifkhia/proposal-presenter-frontend`  | `proposal-presenter-frontend-1` | 127.0.0.1:8080 (served on 443 by the host nginx, see [HTTPS](#https)) |
+| `frontend` | `ghcr.io/rifkhia/proposal-presenter-frontend`  | `proposal-presenter-frontend-1` | 8080      |
 
 - `docker-compose.deploy.yml` pulls the published images. The VM uses it.
 - `docker-compose.yml` builds from source. Use it for local runs.
@@ -64,57 +64,20 @@ mkdir -p /opt/proposal-presenter/proposals
 cd /opt/proposal-presenter      # copy docker-compose.deploy.yml (and optionally .env) here
 docker-compose -f docker-compose.deploy.yml up -d
 
-# Then set up HTTPS (next section) and open https://<vm-host>/
+# Open http://<vm-host>:8080
 ```
 
 > Keep the deployment in `/opt`, not `/tmp`. `systemd-tmpfiles` clears `/tmp`, and it would take `proposals/` with it.
 
 ### HTTPS
 
-The app is live at **https://vmw4-raprustandi.cdt.spb.openwaygroup.com/**.
+HTTPS is **not enabled**; the app is served over plain HTTP at **http://vmw4-raprustandi.cdt.spb.openwaygroup.com:8080/**.
 
-How it's wired:
-- The **host's nginx** handles HTTPS on port 443, using `nginx-vm.conf`, installed as `/etc/nginx/conf.d/proposal-presenter.conf`.
-- It forwards to the app on `127.0.0.1:8080`.
-- The app container is published on loopback only (`APP_PORT=127.0.0.1:8080` in `.env`), so there is no plain-HTTP way in, and the editor password always travels encrypted.
-- Port 80 on this host belongs to simple-placement-providers and isn't touched.
+It was set up once and rolled back. Commits `6de2283` and `61d6b0c` have the working setup: TLS on the host nginx, plus a private CA restricted to this hostname that each device installs. It was rolled back because every user has to install that CA. A plain self-signed certificate can't be used here: some browsers hold an HSTS record for this hostname (likely from the Vault UI that once ran on `:8200`), and HSTS forbids clicking through certificate warnings.
 
-**Certificate: a private CA that only covers this hostname.** Company laptops don't necessarily trust the OpenWay Group CA (this Mac has none of its certificates), and the VM isn't reachable for Let's Encrypt. So the server certificate is signed by a small private CA, `proposal-presenter local CA (vmw4-raprustandi)`, which you install once per device. The CA carries a critical *name constraint* limiting it to `vmw4-raprustandi.cdt.spb.openwaygroup.com`, so trusting it can't be abused to impersonate any other site: a certificate it signs for another name fails with "permitted subtree violation".
+The app's own nginx still keeps the client address and scheme that a proxy on the same host passes along, so putting HTTPS in front later needs no app change.
 
-A self-signed certificate with a "click to proceed" warning is **not** an option on this host. Chrome already has an HSTS record for this hostname, most likely from the Vault UI that ran here on `:8200`, and HSTS forbids clicking through certificate errors.
-
-**Install the CA once per device** (the file is [`certs/proposal-presenter-ca.crt`](certs/proposal-presenter-ca.crt)). Then fully quit and reopen the browser.
-
-- **macOS:**
-  ```bash
-  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/proposal-presenter-ca.crt
-  ```
-- **Windows:** double-click the file, choose *Install Certificate*, then *Current User*, then *Place all certificates in: Trusted Root Certification Authorities*.
-- **Linux (Chrome):**
-  ```bash
-  certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n proposal-presenter-ca -i certs/proposal-presenter-ca.crt
-  ```
-
-SHA-256 fingerprint to check against: `5E:86:74:F6:5F:17:6A:3A:9D:78:94:88:15:D7:7E:61:A0:DE:45:21:75:82:79:DC:6A:74:8D:92:DA:FF:32:71`.
-
-| File on the VM (`/etc/pki/nginx/`) | What |
-|---|---|
-| `private/vmw4-raprustandi.key` | Server key (root only) |
-| `vmw4-raprustandi.crt` | Server certificate nginx serves, signed by the local CA, valid until Oct 2027 |
-| `vmw4-raprustandi.csr` | Certificate request for the same key, in case IT issues an OpenWay certificate later |
-| `local-ca.crt`, `private/local-ca.key` | The local CA, valid until Sep 2031. Keep the key root-only; it's what signs renewals |
-| `local-ca.cnf`, `leaf.ext` | The settings the CA and the server certificate were made with |
-
-**Renewing the server certificate** before it expires. Devices keep trusting the CA, so nobody reinstalls anything:
-
-```bash
-cd /etc/pki/nginx
-openssl x509 -req -sha256 -days 397 -in vmw4-raprustandi.csr -CA local-ca.crt -CAkey private/local-ca.key \
-  -CAserial local-ca.srl -extfile leaf.ext -out vmw4-raprustandi.crt
-nginx -t && systemctl reload nginx
-```
-
-**Switching to an OpenWay certificate instead** (only worth it once every device trusts the OpenWay Group Root CA): send `vmw4-raprustandi.csr` to IT, put the returned certificate followed by its intermediates into `vmw4-raprustandi.crt`, and reload nginx.
+> **"Your connection is not private … the website uses HSTS" on `http://…:8080`?** That browser has an HSTS record for this hostname, so it rewrites `http://` to `https://` on every port. In Chrome, open `chrome://net-internals/#hsts`, go to *Delete domain security policies*, enter `vmw4-raprustandi.cdt.spb.openwaygroup.com`, and click *Delete*. Then reload `http://…:8080`.
 
 ### Updating a deployment
 
@@ -165,7 +128,7 @@ No restart is needed. Files are read from disk on every request, so just refresh
 
 | Variable         | Default       | Meaning                                                  |
 |------------------|---------------|----------------------------------------------------------|
-| `APP_PORT`       | `8080`        | Host port the app is published on. `127.0.0.1:8080` on the VM, so only the HTTPS proxy can reach it |
+| `APP_PORT`       | `8080`        | Host port the app is published on                        |
 | `PROPOSALS_PATH` | `./proposals` | Host folder with the Markdown files                      |
 | `EDIT_PASSWORD_HASH` | *(empty)* | Hash of the editor password. Empty means editing is off (see [Editing](#editing)) |
 
@@ -256,8 +219,7 @@ Reading and commenting are open: anyone who can reach the port can read proposal
 Sign-in details:
 - The password is checked against a PBKDF2-SHA256 hash (600,000 iterations).
 - Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies. The signing key lives in the data volume and is mixed with the password hash, so changing the password invalidates every session.
-- The app is only reachable over HTTPS (see [HTTPS](#https)), and the session cookie is marked `Secure`.
-- The certificate comes from a private CA that is name-constrained to this one hostname (see [HTTPS](#https)). Installing that CA on a device lets it verify this server, and nothing else.
+- The app is served over plain HTTP (see [HTTPS](#https)), so the editor password crosses the network unencrypted when someone signs in. That's acceptable only on a trusted internal network. The session cookie is marked `Secure` automatically if HTTPS is added in front.
 - The sign-in lockout counts failures per client address. The app's nginx takes that address from the `X-Real-IP` header only when the request comes from loopback or a container bridge network (a proxy on the same host), so clients can't fake it.
 
 ## Troubleshooting
