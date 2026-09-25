@@ -1,6 +1,22 @@
+# Keep the scheme a TLS-terminating proxy in front reports (e.g. the host nginx
+# serving HTTPS), so the backend marks the session cookie Secure.
+map $http_x_forwarded_proto $forwarded_proto {
+    default $http_x_forwarded_proto;
+    ''      $scheme;
+}
+
 server {
     listen 80;
     server_name _;
+
+    # Behind a reverse proxy on the same host, requests arrive from loopback or the
+    # container bridge. Take the client address from its X-Real-IP there, so the
+    # backend's sign-in lockout is per client rather than one bucket for everyone.
+    # Direct clients come from other addresses, so they can't spoof it.
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from 10.89.0.0/16;   # podman bridge networks
+    set_real_ip_from 172.16.0.0/12;  # docker bridge networks
+    real_ip_header X-Real-IP;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -17,7 +33,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
     }
 
     # Hashed build assets can be cached forever.

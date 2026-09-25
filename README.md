@@ -31,7 +31,7 @@ push to main → Actions builds both images → GHCR (:latest, :<sha>)
 | Service    | Image                                          | Container                       | Host port |
 |------------|------------------------------------------------|---------------------------------|-----------|
 | `backend`  | `ghcr.io/rifkhia/proposal-presenter-backend`   | `proposal-presenter-backend-1`  | none      |
-| `frontend` | `ghcr.io/rifkhia/proposal-presenter-frontend`  | `proposal-presenter-frontend-1` | 8080      |
+| `frontend` | `ghcr.io/rifkhia/proposal-presenter-frontend`  | `proposal-presenter-frontend-1` | 127.0.0.1:8080 (served on 443 by the host nginx, see [HTTPS](#https)) |
 
 - `docker-compose.deploy.yml` pulls the published images. The VM uses it.
 - `docker-compose.yml` builds from source. Use it for local runs.
@@ -64,10 +64,44 @@ mkdir -p /opt/proposal-presenter/proposals
 cd /opt/proposal-presenter      # copy docker-compose.deploy.yml (and optionally .env) here
 docker-compose -f docker-compose.deploy.yml up -d
 
-# Open http://<vm-host>:8080
+# Then set up HTTPS (next section) and open https://<vm-host>/
 ```
 
 > Keep the deployment in `/opt`, not `/tmp`. `systemd-tmpfiles` clears `/tmp`, and it would take `proposals/` with it.
+
+### HTTPS
+
+The app is live at **https://vmw4-raprustandi.cdt.spb.openwaygroup.com/**.
+
+How it's wired:
+- The **host's nginx** handles HTTPS on port 443, using `nginx-vm.conf`, installed as `/etc/nginx/conf.d/proposal-presenter.conf`.
+- It forwards to the app on `127.0.0.1:8080`.
+- The app container is published on loopback only (`APP_PORT=127.0.0.1:8080` in `.env`), so there is no plain-HTTP way in, and the editor password always travels encrypted.
+- Port 80 on this host belongs to simple-placement-providers and isn't touched.
+
+| File | What |
+|---|---|
+| `/etc/pki/nginx/private/vmw4-raprustandi.key` | Private key (root only). Keep it; the company certificate reuses it. |
+| `/etc/pki/nginx/vmw4-raprustandi.crt` | The certificate nginx serves. **Currently self-signed**, valid one year. |
+| `/etc/pki/nginx/vmw4-raprustandi.csr` | Certificate request for the OpenWay Group CA, made from the same key. |
+
+**Getting rid of the browser warning.** A self-signed certificate makes browsers warn once per device. To use a certificate your company's machines already trust:
+
+1. Send `vmw4-raprustandi.csr` to IT. Ask for a TLS server certificate from the OpenWay Group CA (the *Web Services CA*) for `vmw4-raprustandi.cdt.spb.openwaygroup.com`.
+2. Replace `/etc/pki/nginx/vmw4-raprustandi.crt` with what they return, in PEM format: the server certificate first, then any intermediate CA certificates. The key doesn't change.
+3. Run `nginx -t && systemctl reload nginx`.
+4. Uncomment the `Strict-Transport-Security` line in the nginx config and reload again. Only do this once the certificate is trusted: with HSTS, browsers won't let anyone click through a certificate warning.
+
+**Recreating the key, CSR and self-signed certificate** (for example, before the self-signed one expires):
+
+```bash
+cd /etc/pki/nginx && H=vmw4-raprustandi.cdt.spb.openwaygroup.com
+openssl req -new -newkey rsa:2048 -nodes -keyout private/vmw4-raprustandi.key -out vmw4-raprustandi.csr \
+  -subj "/CN=$H" -addext "subjectAltName=DNS:$H"
+openssl req -x509 -key private/vmw4-raprustandi.key -out vmw4-raprustandi.crt -days 365 \
+  -subj "/CN=$H" -addext "subjectAltName=DNS:$H"
+chmod 600 private/vmw4-raprustandi.key && nginx -t && systemctl reload nginx
+```
 
 ### Updating a deployment
 
@@ -118,7 +152,7 @@ No restart is needed. Files are read from disk on every request, so just refresh
 
 | Variable         | Default       | Meaning                                                  |
 |------------------|---------------|----------------------------------------------------------|
-| `APP_PORT`       | `8080`        | Host port the app is published on                        |
+| `APP_PORT`       | `8080`        | Host port the app is published on. `127.0.0.1:8080` on the VM, so only the HTTPS proxy can reach it |
 | `PROPOSALS_PATH` | `./proposals` | Host folder with the Markdown files                      |
 | `EDIT_PASSWORD_HASH` | *(empty)* | Hash of the editor password. Empty means editing is off (see [Editing](#editing)) |
 
@@ -209,7 +243,9 @@ Reading and commenting are open: anyone who can reach the port can read proposal
 Sign-in details:
 - The password is checked against a PBKDF2-SHA256 hash (600,000 iterations).
 - Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies. The signing key lives in the data volume and is mixed with the password hash, so changing the password invalidates every session.
-- The app is served over plain HTTP on port 8080, so the password travels unencrypted on your network. Put it behind HTTPS if that network isn't trusted. The cookie is marked `Secure` automatically when the request arrives over HTTPS.
+- The app is only reachable over HTTPS (see [HTTPS](#https)), and the session cookie is marked `Secure`.
+- Until the certificate is signed by the company CA, the browser warning means users can't tell the real server from an impostor. Get the signed certificate (steps above) rather than training people to click through warnings.
+- The sign-in lockout counts failures per client address. The app's nginx takes that address from the `X-Real-IP` header only when the request comes from loopback or a container bridge network (a proxy on the same host), so clients can't fake it.
 
 ## Troubleshooting
 
