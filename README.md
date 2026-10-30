@@ -5,7 +5,7 @@ A small web app for sharing proposals written in Markdown (or HTML, such as a Cl
 - **Inline comments:** select text, or hover a block and click **+**, to comment on that passage. Each inline thread shows the source line it refers to (for example `Line 12` or `Lines 17–21`). Click it to jump to the passage, which is then highlighted.
 - **Rendered / Source toggle:** Source shows the raw Markdown with line numbers. Click a line number to comment on that line, or shift-click a second one to comment on a range.
 - **Replies and resolving:** reply to any thread, and resolve it when it's settled. Resolved threads move to the *Resolved* tab and can be reopened.
-- **Deleting comments:** only the account that posted a comment can delete it. Comments posted while not signed in (or with the shared editor password) belong to no one and stay. A thread that has replies from others can't be deleted; resolve it instead.
+- **Deleting comments:** only the account that posted a comment, or an [admin](#admin), can delete it. Comments posted while not signed in (or with the shared editor password) belong to no one and stay. A thread that has replies from others can't be deleted; resolve it instead.
 - **Shareable links:** *Copy link* on a thread gives a URL (`?thread=12`) that opens the proposal with that thread selected.
 - **Editing in the browser:** editors sign in with their own account (or the shared editor password) and edit the Markdown directly (see [Editing](#editing)). The editor highlights lines that have comments. As you type, the comment markers move with the text, and hovering a marker shows the comment.
 - **Upload and delete:** editors can upload `.md`/`.html` files from the browser, and delete the ones they uploaded. Deleting moves the file to a hidden trash folder, so it can be restored.
@@ -127,7 +127,7 @@ No restart is needed. Files are read from disk on every request, so just refresh
 - Hidden files and folders (starting with `.`) are ignored.
 - `proposals/example-proposal.md` is a sample. Delete it once you've added your own.
 
-**Delete in the browser:** the account that uploaded a proposal sees a **Delete** button on it; nobody else does, and the server refuses them too. Proposals copied in on the server (or uploaded with the shared editor password) have no owner, so they can only be removed on the server. After you confirm, the file moves to `proposals/.trash/<UTC time>/<its path>` together with its comments, and folders it leaves empty are removed. Hidden folders aren't listed, so it disappears from the app, but nothing is lost. The backend log records who deleted what. To restore one, move the file back and point its comments and owner at the old path again:
+**Delete in the browser:** the account that uploaded a proposal sees a **Delete** button on it; nobody else does, and the server refuses them too. Proposals copied in on the server (or uploaded with the shared editor password) have no owner, so only an [admin](#admin) can delete them from the app. After you confirm, the file moves to `proposals/.trash/<UTC time>/<its path>` together with its comments, and folders it leaves empty are removed. Hidden folders aren't listed, so it disappears from the app, but nothing is lost. The backend log records who deleted what. To restore one, move the file back and point its comments and owner at the old path again:
 
 ```bash
 cd /opt/proposal-presenter
@@ -199,6 +199,16 @@ To remove an account (this ends its sessions):
 docker-compose -f docker-compose.deploy.yml exec backend python -c "import sqlite3; c = sqlite3.connect('/data/comments.db'); c.execute('DELETE FROM users WHERE username = ?', ('alice',)); c.commit()"
 ```
 
+### Admin
+
+An admin is an account that can delete **any** proposal or comment, including ones with no owner and threads with replies from others. The top bar shows an *admin* tag. Admins can't be registered from the app; create one on the server (you type the password twice, and only its hash is stored):
+
+```bash
+docker-compose -f docker-compose.deploy.yml exec backend python -m app.makeadmin admin
+```
+
+Running it for an existing username makes that account admin and sets the password you type, so it also resets a forgotten admin password. To take admin away: `UPDATE users SET is_admin = 0 WHERE username = 'admin'` (see removing an account above for how to run SQL).
+
 ### How editing works
 
 - Click **Edit** on a proposal and sign in. You stay signed in for 12 hours (HttpOnly cookie).
@@ -250,7 +260,7 @@ $DC cp ./comments-backup.db backend:/data/comments.db && $DC restart backend
 
 ## Security note
 
-Reading and commenting are open: anyone who can reach the port can read proposals, and post and resolve comments. **Changing proposals** (edit, upload) needs signing in. **Deleting** a proposal or a comment needs the account that created it. Keep the app on an internal network or VPN.
+Reading and commenting are open: anyone who can reach the port can read proposals, and post and resolve comments. **Changing proposals** (edit, upload) needs signing in. **Deleting** a proposal or a comment needs the account that created it, or an admin. Keep the app on an internal network or VPN.
 
 Sign-in details:
 - Passwords, shared and per account, are checked against PBKDF2-SHA256 hashes (600,000 iterations). Account hashes live in the `users` table; plain passwords are never stored or logged.
@@ -293,14 +303,14 @@ npm run dev
 | `GET`    | `/api/proposals/{path}`       | Metadata (`kind`, `version`, `writable`, `owner`: the uploading account or null) for one proposal, plus the raw Markdown as `content` for `kind: "markdown"` |
 | `POST`   | `/api/proposals`              | Upload a new `.md` or `.html` (editor only): `{filename, folder?, content}`. 201 returns the same shape as `GET /api/proposals/{path}`. 400 for an invalid name or folder, 403 if editing is off or the folder isn't writable, 409 if the name exists (body `{detail, path, version}`; replace it with `PUT` using that `version` as `base_version`) |
 | `PUT`    | `/api/proposals/{path}`       | Save (editor only): `{content, base_version, force?}`, Markdown or HTML. Returns 409 if the file changed since `base_version` |
-| `DELETE` | `/api/proposals/{path}`       | Delete (the uploading account only): moves the file to `.trash/<UTC time>/<path>` and its comments with it. Returns `{path, trashed_as}`; 401 if signed out, 403 for anyone but the owner, for proposals with no owner, or if the folder isn't writable |
+| `DELETE` | `/api/proposals/{path}`       | Delete (the uploading account, or an admin): moves the file to `.trash/<UTC time>/<path>` and its comments with it. Returns `{path, trashed_as}`; 401 if signed out, 403 for anyone but the owner or an admin (proposals with no owner: admins only), or if the folder isn't writable |
 | `GET`    | `/api/render/{path}`          | An HTML proposal as a sandboxed page (`Content-Security-Policy: sandbox allow-scripts allow-popups allow-forms`, framed only by the app) |
 | `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar). Sent with `nosniff`, and sandboxed (`Content-Security-Policy: sandbox`) except PDFs, so an opened `.html`/`.svg` can't run script as the app |
 | `GET`    | `/api/comments?proposal=...`  | Threads for a proposal, each with its `replies`           |
 | `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?, version?}`, or reply with `{proposal, author, body, parent_id}`. An inline thread made against an old `version` gets 409 |
 | `PATCH`  | `/api/comments/{id}`          | Resolve or reopen a thread: `{resolved, by?}`             |
-| `DELETE` | `/api/comments/{id}`          | Delete your own reply, or your own thread with its replies. 401 unless signed in with an account, 403 if someone else posted it (or no account did), 409 if others replied to the thread |
-| `GET`    | `/api/auth`                   | `{enabled, signed_in, username}` (`username` is null for the shared password) |
+| `DELETE` | `/api/comments/{id}`          | Delete your own reply, or your own thread with its replies; admins may delete any. 401 unless signed in with an account, 403 if someone else posted it (or no account did), 409 if others replied to the thread |
+| `GET`    | `/api/auth`                   | `{enabled, signed_in, username, admin}` (`username` is null for the shared password) |
 | `POST`   | `/api/auth/register`          | `{username, password, code}`, where `code` is the editor password. Creates the account and signs it in (201). 400 for a bad username (3–40 of letters, digits, `.` `_` `-`) or a password under 8 chars, 401 for a wrong code, 409 if the username is taken (case-insensitive) |
 | `POST`   | `/api/auth/login`             | `{username, password}`, or `{password}` alone for the editor password; sets the session cookie |
 | `POST`   | `/api/auth/logout`            | Clears the session cookie                                 |

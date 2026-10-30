@@ -3,11 +3,12 @@ import { api } from './api'
 import { author } from './author'
 
 // Editor sign-in state. `enabled` is false when the server has no EDIT_PASSWORD_HASH.
-// `username` is null when signed in with the shared editor password.
+// `username` is null when signed in with the shared editor password. Admins may delete anything.
 export const session = reactive({
   enabled: false,
   signedIn: false,
   username: null,
+  admin: false,
 
   async refresh() {
     try {
@@ -30,8 +31,13 @@ export const session = reactive({
   },
 
   apply(s) {
-    Object.assign(this, { enabled: s.enabled, signedIn: s.signed_in, username: s.username ?? null })
+    Object.assign(this, { enabled: s.enabled, signedIn: s.signed_in, username: s.username ?? null, admin: !!s.admin })
     // Comment as yourself by default.
     if (this.username && !author.value.trim()) author.value = this.username
+  },
+
+  // Deleting is for whoever created the proposal or comment, and for admins.
+  canDelete(owner) {
+    return this.admin || (!!this.username && owner === this.username)
   },
 })

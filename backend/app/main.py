@@ -130,7 +130,7 @@ def health():
 
 
 def _auth_state(user: str | None) -> dict:
-    return {"enabled": auth.enabled(), "signed_in": user is not None, "username": user or None}
+    return {"enabled": auth.enabled(), "signed_in": user is not None, "username": user or None, "admin": auth.is_admin(user)}
 
 
 @app.get("/api/auth")
@@ -257,7 +257,8 @@ def save_proposal(path: str, edit: ProposalEdit):
 @app.delete("/api/proposals/{path:path}")
 def delete_proposal(path: str, user: Annotated[str, Depends(auth.require_editor)]):
     """Moves a proposal to the hidden .trash folder, taking its comments along so a new
-    file with the same name starts clean. Only the account that uploaded it may do this.
+    file with the same name starts clean. Only the account that uploaded it, or an admin,
+    may do this.
     Restoring is manual (see README: Deleting)."""
     file = proposals.resolve_document(path)
     if file is None:
@@ -265,10 +266,11 @@ def delete_proposal(path: str, user: Annotated[str, Depends(auth.require_editor)
     rel = _rel(file)
     with db.connect() as conn:
         owner = _owner(conn, rel)
-    if owner is None:
-        raise HTTPException(403, "This proposal wasn't uploaded through the app, so it can only be removed on the server")
-    if owner != user:
-        raise HTTPException(403, f"Only {owner}, who uploaded this proposal, can delete it")
+    if not auth.is_admin(user):  # admins may delete anything
+        if owner is None:
+            raise HTTPException(403, "This proposal wasn't uploaded through the app, so it can only be removed on the server")
+        if owner != user:
+            raise HTTPException(403, f"Only {owner}, who uploaded this proposal, can delete it")
     if not proposals.is_writable(file):
         raise HTTPException(403, NOT_WRITABLE)
     trashed = proposals.trash_path(file)
@@ -407,7 +409,7 @@ def resolve_comment(comment_id: int, change: ResolveIn):
 @app.delete("/api/comments/{comment_id}", status_code=204)
 def delete_comment(comment_id: int, request: Request):
     """Deletes your own reply, or your own thread including its replies if they're yours too.
-    Comments posted without an account can't be deleted from the app."""
+    Comments posted without an account can only be deleted by an admin, who may delete any."""
     user = auth.current_user(request)
     if not user:
         raise HTTPException(401, "Sign in with your account to delete your comments")
@@ -415,11 +417,12 @@ def delete_comment(comment_id: int, request: Request):
         row = _get(conn, comment_id)
         if row is None:
             raise HTTPException(404, "Comment not found")
-        if row["owner"] != user:
-            raise HTTPException(403, "You can only delete your own comments")
-        others = conn.execute(
-            "SELECT COUNT(*) FROM comments WHERE parent_id = ? AND owner IS NOT ?", (comment_id, user)
-        ).fetchone()[0]
-        if others:
-            raise HTTPException(409, "Others have replied to this thread. Resolve it instead.")
+        if not auth.is_admin(user):  # admins may delete anything
+            if row["owner"] != user:
+                raise HTTPException(403, "You can only delete your own comments")
+            others = conn.execute(
+                "SELECT COUNT(*) FROM comments WHERE parent_id = ? AND owner IS NOT ?", (comment_id, user)
+            ).fetchone()[0]
+            if others:
+                raise HTTPException(409, "Others have replied to this thread. Resolve it instead.")
         conn.execute("DELETE FROM comments WHERE id = ? OR parent_id = ?", (comment_id, comment_id))

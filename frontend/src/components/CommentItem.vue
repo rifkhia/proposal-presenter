@@ -12,9 +12,8 @@ defineEmits(['delete'])
       <span class="avatar" aria-hidden="true">{{ comment.author.charAt(0).toUpperCase() }}</span>
       <strong>{{ comment.author }}</strong>
       <span class="muted" :title="fullDate(comment.created_at)">{{ timeAgo(comment.created_at) }}</span>
-      <!-- Only the account that posted a comment can delete it. -->
       <button
-        v-if="comment.owner && comment.owner === session.username"
+        v-if="session.canDelete(comment.owner)"
         class="link-btn danger"
         title="Delete"
         @click="$emit('delete')"

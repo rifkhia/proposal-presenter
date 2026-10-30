@@ -47,8 +47,7 @@ const path = computed(() => route.params.path)
 const store = useComments(path)
 // HTML proposals have no `content`: they're shown sandboxed from /api/render, with general comments only.
 const isMarkdown = computed(() => proposal.value?.kind === 'markdown')
-// Only the account that uploaded a proposal can delete it.
-const canDelete = computed(() => !!session.username && proposal.value?.owner === session.username)
+const canDelete = computed(() => !!proposal.value && session.canDelete(proposal.value.owner))
 const renderUrl = computed(() => (proposal.value ? `/api/render/${encodePath(proposal.value.path)}` : ''))
 const html = computed(() => (isMarkdown.value ? renderMarkdown(proposal.value.content, proposal.value.path) : ''))
 

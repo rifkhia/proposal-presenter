@@ -109,6 +109,35 @@ def _find_user(username: str):
         ).fetchone()
 
 
+def is_admin(username: str | None) -> bool:
+    if not username:
+        return False
+    with db.connect() as conn:
+        row = conn.execute("SELECT is_admin FROM users WHERE username = ?", (username,)).fetchone()
+    return bool(row and row["is_admin"])
+
+
+def set_admin(username: str, password: str) -> bool:
+    """Creates the account as an admin, or makes an existing one admin with this password.
+    Returns True if the account already existed."""
+    if not USERNAME.fullmatch(username):
+        raise ValueError("Username: 3-40 letters, digits, . _ or -, starting with a letter or digit")
+    if len(password) < MIN_PASSWORD:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD} characters")
+    with db.connect() as conn:
+        cur = conn.execute(
+            "UPDATE users SET password_hash = ?, is_admin = 1 WHERE username = ?",
+            (hash_password(password), username),
+        )
+        if cur.rowcount:
+            return True
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)",
+            (username, hash_password(password)),
+        )
+        return False
+
+
 def current_user(request: Request) -> str | None:
     """The signed-in username, "" for the shared password, or None if not signed in."""
     if not enabled():

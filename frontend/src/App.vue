@@ -18,6 +18,7 @@ onMounted(() => session.refresh())
       <div v-if="session.signedIn" class="session-pill">
         <span class="dot" aria-hidden="true" />
         Signed in as <strong>{{ session.username || 'editor' }}</strong>
+        <span v-if="session.admin" class="tag">admin</span>
         <button class="link-btn" @click="session.signOut()">Sign out</button>
       </div>
     </div>

@@ -17,7 +17,7 @@ def login(client, username="alice", password=USER_PASSWORD):
 def test_register_stores_only_a_hash_and_signs_in(client):
     res = register(client)
     assert res.status_code == 201, res.text
-    assert res.json() == {"enabled": True, "signed_in": True, "username": "alice"}
+    assert res.json() == {"enabled": True, "signed_in": True, "username": "alice", "admin": False}
     assert client.get("/api/auth").json()["username"] == "alice"
     with db.connect() as conn:
         row = conn.execute("SELECT * FROM users").fetchone()

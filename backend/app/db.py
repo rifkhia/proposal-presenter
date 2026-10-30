@@ -49,8 +49,9 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 # Columns added after the first release. Databases created before them get the
-# columns on startup, so existing comments are kept.
+# columns on startup, so existing rows are kept.
 ADDED_COLUMNS = {
+  "comments": {
     "parent_id": "INTEGER",
     "line_start": "INTEGER",
     "line_end": "INTEGER",
@@ -59,6 +60,11 @@ ADDED_COLUMNS = {
     "resolved_at": "TEXT",
     # Account that posted the comment, if any; only it can delete the comment.
     "owner": "TEXT",
+  },
+  "users": {
+    # Admins may delete any proposal or comment. Set with `python -m app.makeadmin`.
+    "is_admin": "INTEGER NOT NULL DEFAULT 0",
+  },
 }
 
 NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
@@ -69,10 +75,11 @@ def init_db() -> None:
     with connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(comments)")}
-        for column, ddl in ADDED_COLUMNS.items():
-            if column not in existing:
-                conn.execute(f"ALTER TABLE comments ADD COLUMN {column} {ddl}")
+        for table, columns in ADDED_COLUMNS.items():
+            existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for column, ddl in columns.items():
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments (parent_id)")
 
 

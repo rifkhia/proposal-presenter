@@ -62,6 +62,6 @@ def alice(client):
 
 
 @pytest.fixture
-def bob(alice):  # a second browser; depends on alice so the app is already started
+def bob(client):  # a second browser
     with TestClient(main.app) as c:
         yield _register(c, "bob")
