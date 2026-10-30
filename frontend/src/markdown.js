@@ -20,6 +20,15 @@ function resolveRelative(baseDir, url) {
   return { path: parts.join('/'), suffix }
 }
 
+// Links to Claude (claude.ai, claude.site, claude.com and their subdomains), e.g. a shared artifact.
+export function isClaudeUrl(url) {
+  try {
+    return /(^|\.)claude\.(ai|site|com)$/i.test(new URL(url).hostname)
+  } catch {
+    return false
+  }
+}
+
 function slugify(text) {
   return (
     text
@@ -77,12 +86,13 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   if (/^https?:\/\//i.test(href)) {
     token.attrSet('target', '_blank')
     token.attrSet('rel', 'noopener noreferrer')
+    if (isClaudeUrl(href)) token.attrJoin('class', 'claude-link')
   } else if (href && !isAbsolute(href)) {
     const { path, suffix } = resolveRelative(env.baseDir, href)
     // Links to other proposals stay in the app; anything else is served as a file.
     token.attrSet(
       'href',
-      /\.md$/i.test(path) ? `/p/${encodePath(path)}${suffix}` : `/api/assets/${encodePath(path)}${suffix}`,
+      /\.(md|html?)$/i.test(path) ? `/p/${encodePath(path)}${suffix}` : `/api/assets/${encodePath(path)}${suffix}`,
     )
   }
   return defaultLinkOpen(tokens, idx, options, env, self)

@@ -5,8 +5,9 @@ async function request(url, options = {}) {
   })
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
+    let data
     try {
-      const data = await res.json()
+      data = await res.json()
       if (typeof data.detail === 'string') message = data.detail
       else if (Array.isArray(data.detail)) message = data.detail.map((d) => d.msg).join(', ')
     } catch {
@@ -14,6 +15,7 @@ async function request(url, options = {}) {
     }
     const error = new Error(message)
     error.status = res.status
+    error.data = data // the parsed body, e.g. a 409's {path, version}
     throw error
   }
   return res.status === 204 ? null : res.json()
@@ -25,6 +27,7 @@ const encodePath = (path) => path.split('/').map(encodeURIComponent).join('/')
 export const api = {
   listProposals: () => request('/api/proposals'),
   getProposal: (path) => request(`/api/proposals/${encodePath(path)}`),
+  uploadProposal: (body) => request('/api/proposals', { method: 'POST', body: JSON.stringify(body) }),
   saveProposal: (path, content, baseVersion, force = false) =>
     request(`/api/proposals/${encodePath(path)}`, {
       method: 'PUT',

@@ -2,12 +2,18 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, encodePath } from '../api'
 import { fullDate, timeAgo } from '../format'
+import { session } from '../session'
+import LoginDialog from '../components/LoginDialog.vue'
+import UploadDialog from '../components/UploadDialog.vue'
 
 const proposals = ref([])
 const loading = ref(true)
 const error = ref('')
 const query = ref('')
 const sort = ref('recent')
+const login = ref(null)
+const uploader = ref(null)
+let afterSignIn = null
 
 async function load() {
   loading.value = true
@@ -33,6 +39,24 @@ const filtered = computed(() => {
   return list
 })
 
+// Suggestions for the upload dialog's folder field.
+const folders = computed(() => [...new Set(proposals.value.map((p) => p.folder).filter(Boolean))].sort())
+
+function requireSignIn(then, reason) {
+  if (session.signedIn) return then()
+  afterSignIn = then
+  login.value.open(reason)
+}
+
+function onSignedIn() {
+  const next = afterSignIn
+  afterSignIn = null
+  next?.()
+}
+
+const startUpload = () => requireSignIn(() => uploader.value.open(), 'Uploading proposals requires the editor password.')
+const retryUpload = () => requireSignIn(() => uploader.value.submit(), 'Your session expired. Sign in again to upload.')
+
 onMounted(load)
 </script>
 
@@ -53,6 +77,7 @@ onMounted(load)
           <option value="comments">Most open comments</option>
         </select>
         <button class="btn" @click="load" :disabled="loading" title="Reload list">Refresh</button>
+        <button v-if="session.enabled" class="btn" @click="startUpload">Upload</button>
       </div>
     </div>
 
@@ -62,7 +87,7 @@ onMounted(load)
     <div v-else-if="proposals.length === 0" class="empty">
       <h2>No proposals yet</h2>
       <p>
-        Drop <code>.md</code> files into the <code>proposals/</code> folder on the server and hit Refresh.
+        Drop <code>.md</code> or <code>.html</code> files into the <code>proposals/</code> folder on the server and hit Refresh.
         Subfolders are supported.
       </p>
     </div>
@@ -74,6 +99,7 @@ onMounted(load)
         <RouterLink :to="`/p/${encodePath(p.path)}`" class="card">
           <div class="card-top">
             <span v-if="p.folder" class="tag">{{ p.folder }}</span>
+            <span v-if="p.kind === 'html'" class="tag">HTML</span>
             <span class="file muted">{{ p.path.split('/').pop() }}</span>
           </div>
           <h2>{{ p.title }}</h2>
@@ -91,5 +117,8 @@ onMounted(load)
         </RouterLink>
       </li>
     </ul>
+
+    <LoginDialog ref="login" @signed-in="onSignedIn" />
+    <UploadDialog ref="uploader" :folders="folders" @need-sign-in="retryUpload" />
   </div>
 </template>

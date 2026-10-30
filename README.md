@@ -1,6 +1,6 @@
 # proposal-presenter
 
-A small web app for sharing proposals written in Markdown. It lists every `.md` file in a folder. Click one to read it and discuss it in comment threads, the way you'd review a pull request on GitHub or Bitbucket.
+A small web app for sharing proposals written in Markdown (or HTML, such as a Claude artifact). It lists every `.md` and `.html` file in a folder. Click one to read it and discuss it in comment threads, the way you'd review a pull request on GitHub or Bitbucket.
 
 - **Inline comments:** select text, or hover a block and click **+**, to comment on that passage. Each inline thread shows the source line it refers to (for example `Line 12` or `Lines 17–21`). Click it to jump to the passage, which is then highlighted.
 - **Rendered / Source toggle:** Source shows the raw Markdown with line numbers. Click a line number to comment on that line, or shift-click a second one to comment on a range.
@@ -116,13 +116,29 @@ scp my-proposal.md root@vmw4-raprustandi.cdt.spb.openwaygroup.com:/opt/proposal-
 
 No restart is needed. Files are read from disk on every request, so just refresh the page.
 
+**Upload in the browser:** when [editing](#editing) is set up, the list page has an **Upload** button (editor password required). Choose a `.md` or `.html` file of up to 2 MB (or add a [Claude artifact link](#html-and-claude-artifacts)), adjust its name if you like, and pick a folder or type a new one; empty means the top level, and missing folders are created. Names may contain letters, digits, spaces, `-`, `_` and `.`, and can't start with `.`. Upload never overwrites: if the name is taken you can **Replace** the existing proposal, which saves it like an edit so its comments follow the new text, or rename yours. Folders the app creates are owned by uid 10001, and files it creates get mode `0644`.
+
 - **Title:** the first `# Heading` in the file, or the file name if there is none.
 - **Subfolders** are supported and shown as a tag on the card (for example `proposals/payments/refunds.md`).
 - **Images and links:** relative paths work. For example, `![diagram](img/flow.png)` next to the `.md` file is served, and a link to `other.md` opens that proposal in the app.
+- **HTML files** (`.html`, `.htm`) are listed too, with an *HTML* tag. See [HTML and Claude artifacts](#html-and-claude-artifacts).
 - Hidden files and folders (starting with `.`) are ignored.
 - `proposals/example-proposal.md` is a sample. Delete it once you've added your own.
 
 > Comments are tied to a proposal's file path. Replacing a file under the **same name** keeps its comments, and their line numbers follow the text (see [How comments follow edits](#how-comments-follow-edits)). A **new name**, for example `plan-v2.md`, starts with no comments. The old ones stay with `plan.md` and come back if that file returns.
+
+## HTML and Claude artifacts
+
+**An artifact's HTML:** in Claude, download the artifact as HTML, then upload the `.html` file (or copy it into the proposals folder). It shows inside the proposal page, and *Open full screen* opens it in its own tab. The title is the page's `<title>`, or the file name.
+
+It runs **sandboxed**, so its scripts work but can't reach the app:
+- it has no access to the app's pages, your session or the API;
+- `localStorage`, `sessionStorage` and cookies don't work inside it, so an artifact that saves state there fails or forgets it;
+- only general comments are possible on HTML proposals, not inline ones, and they aren't edited in the app (*Upload* → *Replace* swaps the file).
+
+Only HTML artifacts render. Artifacts Claude downloads in another form (for example React source) can't be shown.
+
+**A link to an artifact:** claude.ai doesn't allow its pages to be shown inside other sites (`frame-ancestors` / `X-Frame-Options`), so a published artifact can't be embedded. Instead, use *Upload* → **Claude artifact link**: paste the `https://` link (claude.ai, claude.site or claude.com), give it a title and an optional description. The app saves a small `.md` file named after the title (you can change the name) with the title, the description and an *Open the artifact in Claude* button, so the link gets a list entry and comments like any proposal. Links to Claude in any proposal are shown as that small button.
 
 ## Configuration (`.env`)
 
@@ -239,6 +255,9 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 PROPOSALS_DIR=../proposals DATA_DIR=../data uvicorn app.main:app --reload
 
+# Backend tests
+pip install -r requirements-dev.txt && pytest
+
 # Frontend (http://localhost:5173, proxies /api to :8000)
 cd frontend
 npm install
@@ -250,9 +269,11 @@ npm run dev
 | Method   | Path                          | Description                                               |
 |----------|-------------------------------|-----------------------------------------------------------|
 | `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, comment count, open threads) |
-| `GET`    | `/api/proposals/{path}`       | Raw Markdown and metadata (`version`, `writable`) for one proposal |
-| `PUT`    | `/api/proposals/{path}`       | Save (editor only): `{content, base_version, force?}`. Returns 409 if the file changed since `base_version` |
-| `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar)      |
+| `GET`    | `/api/proposals/{path}`       | Metadata (`kind`, `version`, `writable`) for one proposal, plus the raw Markdown as `content` for `kind: "markdown"` |
+| `POST`   | `/api/proposals`              | Upload a new `.md` or `.html` (editor only): `{filename, folder?, content}`. 201 returns the same shape as `GET /api/proposals/{path}`. 400 for an invalid name or folder, 403 if editing is off or the folder isn't writable, 409 if the name exists (body `{detail, path, version}`; replace it with `PUT` using that `version` as `base_version`) |
+| `PUT`    | `/api/proposals/{path}`       | Save (editor only): `{content, base_version, force?}`, Markdown or HTML. Returns 409 if the file changed since `base_version` |
+| `GET`    | `/api/render/{path}`          | An HTML proposal as a sandboxed page (`Content-Security-Policy: sandbox allow-scripts allow-popups allow-forms`, framed only by the app) |
+| `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar). Sent with `nosniff`, and sandboxed (`Content-Security-Policy: sandbox`) except PDFs, so an opened `.html`/`.svg` can't run script as the app |
 | `GET`    | `/api/comments?proposal=...`  | Threads for a proposal, each with its `replies`           |
 | `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?, version?}`, or reply with `{proposal, author, body, parent_id}`. An inline thread made against an old `version` gets 409 |
 | `PATCH`  | `/api/comments/{id}`          | Resolve or reopen a thread: `{resolved, by?}`             |

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { api } from '../api'
+import { api, encodePath } from '../api'
 import { renderMarkdown } from '../markdown'
 import { fullDate, timeAgo } from '../format'
 import { anchorFromSelection, quoteFound, stripWhitespace } from '../anchors'
@@ -42,7 +42,10 @@ let afterSignIn = null
 
 const path = computed(() => route.params.path)
 const store = useComments(path)
-const html = computed(() => (proposal.value ? renderMarkdown(proposal.value.content, proposal.value.path) : ''))
+// HTML proposals have no `content`: they're shown sandboxed from /api/render, with general comments only.
+const isMarkdown = computed(() => proposal.value?.kind === 'markdown')
+const renderUrl = computed(() => (proposal.value ? `/api/render/${encodePath(proposal.value.path)}` : ''))
+const html = computed(() => (isMarkdown.value ? renderMarkdown(proposal.value.content, proposal.value.path) : ''))
 
 // The URL holds the view and the active thread, so links to a thread can be shared.
 const view = computed(() => (route.query.view === 'source' ? 'source' : 'rendered'))
@@ -69,13 +72,14 @@ function setView(v) {
 // A thread is outdated when its line is past the end of the file, or its quoted
 // text is in neither the rendered text nor the source any more.
 const haystacks = computed(() => {
-  if (!proposal.value) return []
+  if (!isMarkdown.value) return []
   const t = document.createElement('template')
   t.innerHTML = html.value
   return [stripWhitespace(t.content.textContent), stripWhitespace(proposal.value.content)]
 })
 const outdatedIds = computed(() => {
-  const lineCount = proposal.value?.content.split('\n').length ?? 0
+  if (!isMarkdown.value) return new Set()
+  const lineCount = proposal.value.content.split('\n').length
   return new Set(
     store.threads
       .filter((t) => t.line_start && (t.line_start > lineCount || !quoteFound(haystacks.value, t.quote)))
@@ -262,8 +266,9 @@ onBeforeUnmount(() => {
             <span class="muted" :title="fullDate(proposal.modified)">Updated {{ timeAgo(proposal.modified) }}</span>
           </div>
           <div class="doc-actions">
+            <a v-if="!isMarkdown" class="btn btn-sm" :href="renderUrl" target="_blank" rel="noopener">Open full screen</a>
             <button
-              v-if="session.enabled"
+              v-if="session.enabled && isMarkdown"
               class="btn btn-sm"
               :disabled="!proposal.writable"
               :title="proposal.writable ? 'Edit this proposal' : 'The proposals folder is read-only for the app (see README: Editing)'"
@@ -272,7 +277,7 @@ onBeforeUnmount(() => {
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z" /></svg>
               Edit
             </button>
-            <div class="segmented" role="tablist" aria-label="View">
+            <div v-if="isMarkdown" class="segmented" role="tablist" aria-label="View">
               <button role="tab" :aria-selected="view === 'rendered'" :class="{ on: view === 'rendered' }" @click="setView('rendered')">
                 Rendered
               </button>
@@ -327,6 +332,14 @@ onBeforeUnmount(() => {
             An orange bubble means you changed a commented line. <strong>Ctrl/⌘ + S</strong> saves.
           </p>
         </template>
+
+        <iframe
+          v-else-if="!isMarkdown"
+          class="html-frame"
+          sandbox="allow-scripts allow-popups allow-forms"
+          :src="renderUrl"
+          :title="proposal.title"
+        />
 
         <template v-else>
           <div ref="docArea" @mouseup="captureSelection" @keyup="captureSelection">
