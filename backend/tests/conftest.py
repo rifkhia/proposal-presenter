@@ -25,6 +25,7 @@ def fresh_state(monkeypatch):
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
     monkeypatch.setattr(auth, "EDIT_PASSWORD_HASH", HASH)  # auth reads its own module global
+    monkeypatch.setattr(auth, "ITERATIONS", 1_000)  # account hashes, fast
     auth._failures.clear()
 
 
@@ -44,3 +45,23 @@ def editor(client):
 def _rm_root():
     yield
     shutil.rmtree(ROOT, ignore_errors=True)
+
+
+USER_PASSWORD = "s3cret-enough"
+
+
+def _register(client, username):
+    body = {"username": username, "password": USER_PASSWORD, "code": PASSWORD}
+    client.post("/api/auth/register", json=body).raise_for_status()
+    return client
+
+
+@pytest.fixture
+def alice(client):
+    return _register(client, "alice")
+
+
+@pytest.fixture
+def bob(alice):  # a second browser; depends on alice so the app is already started
+    with TestClient(main.app) as c:
+        yield _register(c, "bob")

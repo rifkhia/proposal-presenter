@@ -17,7 +17,7 @@ onMounted(() => session.refresh())
       </RouterLink>
       <div v-if="session.signedIn" class="session-pill">
         <span class="dot" aria-hidden="true" />
-        Signed in as editor
+        Signed in as <strong>{{ session.username || 'editor' }}</strong>
         <button class="link-btn" @click="session.signOut()">Sign out</button>
       </div>
     </div>

@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS snapshots (
     version     TEXT NOT NULL,
     content     TEXT NOT NULL
 );
+
+-- Who uploaded each proposal; only they can delete it. Files copied in on the
+-- server have no row, so nobody can delete them from the app.
+CREATE TABLE IF NOT EXISTS owners (
+    proposal    TEXT PRIMARY KEY,
+    username    TEXT NOT NULL
+);
+
+-- Editor accounts; see auth.py. Only the PBKDF2 hash of the password is stored.
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 """
 
 # Columns added after the first release. Databases created before them get the
@@ -42,6 +57,8 @@ ADDED_COLUMNS = {
     "resolved": "INTEGER NOT NULL DEFAULT 0",
     "resolved_by": "TEXT",
     "resolved_at": "TEXT",
+    # Account that posted the comment, if any; only it can delete the comment.
+    "owner": "TEXT",
 }
 
 NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"

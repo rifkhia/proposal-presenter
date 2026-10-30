@@ -33,8 +33,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ content, base_version: baseVersion, force }),
     }),
+  deleteProposal: (path) => request(`/api/proposals/${encodePath(path)}`, { method: 'DELETE' }),
   authStatus: () => request('/api/auth'),
-  signIn: (password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
+  signIn: (username, password) =>
+    request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  register: (username, password, code) =>
+    request('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password, code }) }),
   signOut: () => request('/api/auth/logout', { method: 'POST' }),
   listComments: (path) => request(`/api/comments?proposal=${encodeURIComponent(path)}`),
   addComment: (comment) => request('/api/comments', { method: 'POST', body: JSON.stringify(comment) }),

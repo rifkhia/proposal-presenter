@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -17,6 +18,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="proposal-presenter", lifespan=lifespan)
+log = logging.getLogger("uvicorn.error")
 
 NOT_WRITABLE = "The proposals folder isn't writable by the app (see README: Editing)"
 
@@ -73,7 +75,14 @@ class ResolveIn(BaseModel):
 
 
 class LoginIn(BaseModel):
+    username: str = Field(default="", max_length=100)  # "" = the shared editor password
     password: str = Field(min_length=1, max_length=1000)
+
+
+class RegisterIn(BaseModel):
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=1000)
+    code: str = Field(min_length=1, max_length=1000)  # the shared editor password
 
 
 class ProposalEdit(BaseModel):
@@ -104,26 +113,45 @@ def _rel(file) -> str:
     return file.relative_to(PROPOSALS_DIR).as_posix()
 
 
+def _owner(conn, rel: str) -> str | None:
+    row = conn.execute("SELECT username FROM owners WHERE proposal = ?", (rel,)).fetchone()
+    return row["username"] if row else None
+
+
+def _proposal(file, text: str | None = None) -> dict:
+    """read_proposal plus the account that uploaded it (None if copied in on the server)."""
+    with db.connect() as conn:
+        return {**proposals.read_proposal(file, text), "owner": _owner(conn, _rel(file))}
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
 
+def _auth_state(user: str | None) -> dict:
+    return {"enabled": auth.enabled(), "signed_in": user is not None, "username": user or None}
+
+
 @app.get("/api/auth")
 def auth_status(request: Request):
-    return {"enabled": auth.enabled(), "signed_in": auth.is_signed_in(request)}
+    return _auth_state(auth.current_user(request))
 
 
 @app.post("/api/auth/login")
 def login(body: LoginIn, request: Request, response: Response):
-    auth.sign_in(request, response, body.password)
-    return {"enabled": True, "signed_in": True}
+    return _auth_state(auth.sign_in(request, response, body.password, body.username.strip()))
+
+
+@app.post("/api/auth/register", status_code=201)
+def register(body: RegisterIn, request: Request, response: Response):
+    return _auth_state(auth.register(request, response, body.username.strip(), body.password, body.code))
 
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
     auth.sign_out(response)
-    return {"enabled": auth.enabled(), "signed_in": False}
+    return _auth_state(None)
 
 
 @app.get("/api/proposals")
@@ -139,7 +167,9 @@ def list_proposals():
                    FROM comments GROUP BY proposal"""
             )
         }
+        owners = {row["proposal"]: row["username"] for row in conn.execute("SELECT * FROM owners")}
     for item in items:
+        item["owner"] = owners.get(item["path"])
         row = counts.get(item["path"])
         item["comment_count"] = row["total"] if row else 0
         item["open_threads"] = row["open_threads"] if row else 0
@@ -147,7 +177,7 @@ def list_proposals():
 
 
 @app.post("/api/proposals", status_code=201, dependencies=[Depends(auth.require_editor)])
-def create_proposal(upload: ProposalUpload):
+def create_proposal(upload: ProposalUpload, request: Request):
     """Uploads a new proposal. Never overwrites: replacing goes through PUT, using the
     path and version returned with the 409."""
     try:
@@ -175,8 +205,12 @@ def create_proposal(upload: ProposalUpload):
         )
     except PermissionError:
         raise HTTPException(403, NOT_WRITABLE)
+    if user := auth.current_user(request):
+        with db.connect() as conn:
+            # Replaces a row left behind by a file removed on the server.
+            conn.execute("INSERT OR REPLACE INTO owners (proposal, username) VALUES (?, ?)", (rel, user))
     # No snapshot yet: the first GET's anchoring.sync takes it.
-    return proposals.read_proposal(file, upload.content)
+    return _proposal(file, upload.content)
 
 
 @app.get("/api/proposals/{path:path}")
@@ -188,7 +222,7 @@ def get_proposal(path: str):
     if proposals.kind_of(file) == "markdown":
         with db.connect() as conn:
             anchoring.sync(conn, _rel(file), text)
-    return proposals.read_proposal(file, text)
+    return _proposal(file, text)
 
 
 @app.put("/api/proposals/{path:path}", dependencies=[Depends(auth.require_editor)])
@@ -217,7 +251,39 @@ def save_proposal(path: str, edit: ProposalEdit):
                 raise HTTPException(403, NOT_WRITABLE)
             if markdown:
                 result = anchoring.catch_up(conn, rel, edit.content) or result
-    return {"proposal": proposals.read_proposal(file, edit.content), "remap": result}
+    return {"proposal": _proposal(file, edit.content), "remap": result}
+
+
+@app.delete("/api/proposals/{path:path}")
+def delete_proposal(path: str, user: Annotated[str, Depends(auth.require_editor)]):
+    """Moves a proposal to the hidden .trash folder, taking its comments along so a new
+    file with the same name starts clean. Only the account that uploaded it may do this.
+    Restoring is manual (see README: Deleting)."""
+    file = proposals.resolve_document(path)
+    if file is None:
+        raise HTTPException(404, "Proposal not found")
+    rel = _rel(file)
+    with db.connect() as conn:
+        owner = _owner(conn, rel)
+    if owner is None:
+        raise HTTPException(403, "This proposal wasn't uploaded through the app, so it can only be removed on the server")
+    if owner != user:
+        raise HTTPException(403, f"Only {owner}, who uploaded this proposal, can delete it")
+    if not proposals.is_writable(file):
+        raise HTTPException(403, NOT_WRITABLE)
+    trashed = proposals.trash_path(file)
+    with db.connect() as conn:
+        # The lock keeps a save from landing between the move and the comment update;
+        # if the move fails, the update is rolled back.
+        conn.execute("BEGIN IMMEDIATE")
+        for table in ("comments", "snapshots", "owners"):
+            conn.execute(f"UPDATE {table} SET proposal = ? WHERE proposal = ?", (trashed, rel))
+        try:
+            proposals.move_to_trash(file, trashed)
+        except PermissionError:
+            raise HTTPException(403, NOT_WRITABLE)
+    log.info("%s deleted %s (moved to %s)", user or "editor", rel, trashed)
+    return {"path": rel, "trashed_as": trashed}
 
 
 @app.get("/api/render/{path:path}")
@@ -275,7 +341,7 @@ def list_comments(proposal: str = Query(min_length=1)):
 
 
 @app.post("/api/comments", status_code=201)
-def create_comment(comment: CommentIn):
+def create_comment(comment: CommentIn, request: Request):
     file = proposals.resolve_document(comment.proposal)
     if file is None:
         raise HTTPException(404, "Proposal not found")
@@ -296,8 +362,8 @@ def create_comment(comment: CommentIn):
             # The anchor belongs to the thread, not to individual replies.
             comment.quote = comment.line_start = comment.line_end = None
         cur = conn.execute(
-            """INSERT INTO comments (proposal, author, body, quote, line_start, line_end, parent_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO comments (proposal, author, body, quote, line_start, line_end, parent_id, owner)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 comment.proposal,
                 comment.author,
@@ -306,6 +372,7 @@ def create_comment(comment: CommentIn):
                 comment.line_start,
                 comment.line_end,
                 comment.parent_id,
+                auth.current_user(request) or None,  # the shared password is no one in particular
             ),
         )
         created = _comment(_get(conn, cur.lastrowid))
@@ -338,11 +405,21 @@ def resolve_comment(comment_id: int, change: ResolveIn):
 
 
 @app.delete("/api/comments/{comment_id}", status_code=204)
-def delete_comment(comment_id: int):
-    """Deletes a reply, or a whole thread including its replies."""
+def delete_comment(comment_id: int, request: Request):
+    """Deletes your own reply, or your own thread including its replies if they're yours too.
+    Comments posted without an account can't be deleted from the app."""
+    user = auth.current_user(request)
+    if not user:
+        raise HTTPException(401, "Sign in with your account to delete your comments")
     with db.connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM comments WHERE id = ? OR parent_id = ?", (comment_id, comment_id)
-        )
-    if cur.rowcount == 0:
-        raise HTTPException(404, "Comment not found")
+        row = _get(conn, comment_id)
+        if row is None:
+            raise HTTPException(404, "Comment not found")
+        if row["owner"] != user:
+            raise HTTPException(403, "You can only delete your own comments")
+        others = conn.execute(
+            "SELECT COUNT(*) FROM comments WHERE parent_id = ? AND owner IS NOT ?", (comment_id, user)
+        ).fetchone()[0]
+        if others:
+            raise HTTPException(409, "Others have replied to this thread. Resolve it instead.")
+        conn.execute("DELETE FROM comments WHERE id = ? OR parent_id = ?", (comment_id, comment_id))

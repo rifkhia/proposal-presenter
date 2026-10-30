@@ -37,6 +37,9 @@ const saving = ref(false)
 const saveError = ref('')
 const conflict = ref(false)
 const notice = ref('')
+const confirmingDelete = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
 const liveLines = ref(null) // thread id -> lines in the unsaved text, while editing
 let afterSignIn = null
 
@@ -44,6 +47,8 @@ const path = computed(() => route.params.path)
 const store = useComments(path)
 // HTML proposals have no `content`: they're shown sandboxed from /api/render, with general comments only.
 const isMarkdown = computed(() => proposal.value?.kind === 'markdown')
+// Only the account that uploaded a proposal can delete it.
+const canDelete = computed(() => !!session.username && proposal.value?.owner === session.username)
 const renderUrl = computed(() => (proposal.value ? `/api/render/${encodePath(proposal.value.path)}` : ''))
 const html = computed(() => (isMarkdown.value ? renderMarkdown(proposal.value.content, proposal.value.path) : ''))
 
@@ -95,6 +100,7 @@ async function load() {
   selection.value = null
   editing.value = false
   dirty.value = false
+  confirmingDelete.value = false
   try {
     proposal.value = await api.getProposal(path.value)
     document.title = `${proposal.value.title} · Proposal Presenter`
@@ -220,6 +226,33 @@ async function save({ force = false } = {}) {
   }
 }
 
+// ---- Deleting -----------------------------------------------------------------------
+
+function startDelete() {
+  requireSignIn(() => {
+    deleteError.value = ''
+    confirmingDelete.value = true
+  })
+}
+
+async function confirmDelete() {
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    await api.deleteProposal(proposal.value.path)
+    router.push({ name: 'list', state: { deleted: proposal.value.title } })
+  } catch (e) {
+    if (e.status === 401) {
+      session.signedIn = false
+      requireSignIn(confirmDelete, 'Your session expired. Sign in again to delete.')
+    } else {
+      deleteError.value = e.message
+    }
+  } finally {
+    deleting.value = false
+  }
+}
+
 async function discardAndReload() {
   dirty.value = false
   await load()
@@ -264,6 +297,7 @@ onBeforeUnmount(() => {
           <div class="doc-meta">
             <span class="doc-path">{{ proposal.path }}</span>
             <span class="muted" :title="fullDate(proposal.modified)">Updated {{ timeAgo(proposal.modified) }}</span>
+            <span v-if="proposal.owner" class="muted">Uploaded by {{ proposal.owner }}</span>
           </div>
           <div class="doc-actions">
             <a v-if="!isMarkdown" class="btn btn-sm" :href="renderUrl" target="_blank" rel="noopener">Open full screen</a>
@@ -276,6 +310,15 @@ onBeforeUnmount(() => {
             >
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z" /></svg>
               Edit
+            </button>
+            <button
+              v-if="canDelete"
+              class="btn btn-sm"
+              :disabled="!proposal.writable || confirmingDelete"
+              :title="proposal.writable ? 'Delete this proposal' : 'The proposals folder is read-only for the app (see README: Editing)'"
+              @click="startDelete"
+            >
+              Delete
             </button>
             <div v-if="isMarkdown" class="segmented" role="tablist" aria-label="View">
               <button role="tab" :aria-selected="view === 'rendered'" :class="{ on: view === 'rendered' }" @click="setView('rendered')">
@@ -301,6 +344,19 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </header>
+
+        <div v-if="confirmingDelete && !editing" class="notice error small conflict">
+          <strong>Delete "{{ proposal.title }}"?</strong>
+          It's moved to the trash folder on the server, together with its comments, and disappears from the list.
+          Only someone with access to the server can restore it.
+          <p v-if="deleteError">Could not delete: {{ deleteError }}</p>
+          <div class="conflict-actions">
+            <button class="btn btn-sm" :disabled="deleting" @click="confirmingDelete = false">Cancel</button>
+            <button class="btn btn-sm btn-danger" :disabled="deleting" @click="confirmDelete">
+              {{ deleting ? 'Deleting...' : 'Delete' }}
+            </button>
+          </div>
+        </div>
 
         <div v-if="notice && !editing" class="notice success small save-notice">
           {{ notice }}

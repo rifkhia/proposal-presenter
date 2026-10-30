@@ -5,8 +5,10 @@ A small web app for sharing proposals written in Markdown (or HTML, such as a Cl
 - **Inline comments:** select text, or hover a block and click **+**, to comment on that passage. Each inline thread shows the source line it refers to (for example `Line 12` or `Lines 17–21`). Click it to jump to the passage, which is then highlighted.
 - **Rendered / Source toggle:** Source shows the raw Markdown with line numbers. Click a line number to comment on that line, or shift-click a second one to comment on a range.
 - **Replies and resolving:** reply to any thread, and resolve it when it's settled. Resolved threads move to the *Resolved* tab and can be reopened.
+- **Deleting comments:** only the account that posted a comment can delete it. Comments posted while not signed in (or with the shared editor password) belong to no one and stay. A thread that has replies from others can't be deleted; resolve it instead.
 - **Shareable links:** *Copy link* on a thread gives a URL (`?thread=12`) that opens the proposal with that thread selected.
-- **Editing in the browser:** editors sign in with a shared password and edit the Markdown directly (see [Editing](#editing)). The editor highlights lines that have comments. As you type, the comment markers move with the text, and hovering a marker shows the comment.
+- **Editing in the browser:** editors sign in with their own account (or the shared editor password) and edit the Markdown directly (see [Editing](#editing)). The editor highlights lines that have comments. As you type, the comment markers move with the text, and hovering a marker shows the comment.
+- **Upload and delete:** editors can upload `.md`/`.html` files from the browser, and delete the ones they uploaded. Deleting moves the file to a hidden trash folder, so it can be restored.
 - **Comments follow edits:** when a proposal changes, whether edited in the app or replaced on disk, each comment's line numbers move with its text. A thread whose quoted text is gone is marked *Outdated*.
 
 - **Frontend:** Vue 3 + Vite, served by nginx
@@ -116,7 +118,7 @@ scp my-proposal.md root@vmw4-raprustandi.cdt.spb.openwaygroup.com:/opt/proposal-
 
 No restart is needed. Files are read from disk on every request, so just refresh the page.
 
-**Upload in the browser:** when [editing](#editing) is set up, the list page has an **Upload** button (editor password required). Choose a `.md` or `.html` file of up to 2 MB (or add a [Claude artifact link](#html-and-claude-artifacts)), adjust its name if you like, and pick a folder or type a new one; empty means the top level, and missing folders are created. Names may contain letters, digits, spaces, `-`, `_` and `.`, and can't start with `.`. Upload never overwrites: if the name is taken you can **Replace** the existing proposal, which saves it like an edit so its comments follow the new text, or rename yours. Folders the app creates are owned by uid 10001, and files it creates get mode `0644`.
+**Upload in the browser:** when [editing](#editing) is set up, the list page has an **Upload** button (sign-in required). Choose a `.md` or `.html` file of up to 2 MB (or add a [Claude artifact link](#html-and-claude-artifacts)), adjust its name if you like, and pick a folder or type a new one; empty means the top level, and missing folders are created. Names may contain letters, digits, spaces, `-`, `_` and `.`, and can't start with `.`. Upload never overwrites: if the name is taken you can **Replace** the existing proposal, which saves it like an edit so its comments follow the new text, or rename yours. Folders the app creates are owned by uid 10001, and files it creates get mode `0644`.
 
 - **Title:** the first `# Heading` in the file, or the file name if there is none.
 - **Subfolders** are supported and shown as a tag on the card (for example `proposals/payments/refunds.md`).
@@ -124,6 +126,16 @@ No restart is needed. Files are read from disk on every request, so just refresh
 - **HTML files** (`.html`, `.htm`) are listed too, with an *HTML* tag. See [HTML and Claude artifacts](#html-and-claude-artifacts).
 - Hidden files and folders (starting with `.`) are ignored.
 - `proposals/example-proposal.md` is a sample. Delete it once you've added your own.
+
+**Delete in the browser:** the account that uploaded a proposal sees a **Delete** button on it; nobody else does, and the server refuses them too. Proposals copied in on the server (or uploaded with the shared editor password) have no owner, so they can only be removed on the server. After you confirm, the file moves to `proposals/.trash/<UTC time>/<its path>` together with its comments, and folders it leaves empty are removed. Hidden folders aren't listed, so it disappears from the app, but nothing is lost. The backend log records who deleted what. To restore one, move the file back and point its comments and owner at the old path again:
+
+```bash
+cd /opt/proposal-presenter
+mv proposals/.trash/20261030T080852845039Z/team/plan.md proposals/team/plan.md
+docker-compose -f docker-compose.deploy.yml exec backend python -c "import sqlite3; c = sqlite3.connect('/data/comments.db'); [c.execute(f'UPDATE {t} SET proposal = ? WHERE proposal = ?', ('team/plan.md', '.trash/20261030T080852845039Z/team/plan.md')) for t in ('comments', 'snapshots', 'owners')]; c.commit()"
+```
+
+Empty `.trash` whenever you like; its comments then stay in the database, unseen.
 
 > Comments are tied to a proposal's file path. Replacing a file under the **same name** keeps its comments, and their line numbers follow the text (see [How comments follow edits](#how-comments-follow-edits)). A **new name**, for example `plan-v2.md`, starts with no comments. The old ones stay with `plan.md` and come back if that file returns.
 
@@ -152,7 +164,9 @@ After changing `.env`, run `docker-compose -f docker-compose.deploy.yml up -d` o
 
 ## Editing
 
-Editing is **off** until you set a password. There is one shared editor password, and the server only ever stores a hash of it.
+Editing is **off** until you set the shared editor password. The server only ever stores a hash of it.
+
+Each editor then **registers** their own account in the sign-in dialog (*Register* tab): a username, a password, and the editor password as the sign-up code. Account passwords are stored in SQLite (`users` table in `comments.db`), also only as PBKDF2 hashes. After that, people sign in with their own username and password, their name shows in the top bar and is prefilled for comments, and the log records who deleted what. Signing in with an empty username and the editor password still works.
 
 **1. Generate the hash.** You type the password twice; only the hash is printed.
 
@@ -177,12 +191,18 @@ Files you later copy in as root stay editable. Saving only needs the *folder* to
 
 **4. Apply:** run `docker-compose -f docker-compose.deploy.yml up -d`.
 
-To change the password, repeat steps 1, 2 and 4. Changing it signs everyone out.
+To change the password, repeat steps 1, 2 and 4. Changing it signs everyone out, but accounts keep working; only new sign-ups need the new password.
+
+To remove an account (this ends its sessions):
+
+```bash
+docker-compose -f docker-compose.deploy.yml exec backend python -c "import sqlite3; c = sqlite3.connect('/data/comments.db'); c.execute('DELETE FROM users WHERE username = ?', ('alice',)); c.commit()"
+```
 
 ### How editing works
 
-- Click **Edit** on a proposal and enter the password. You stay signed in for 12 hours (HttpOnly cookie).
-- After 5 wrong passwords, sign-in from that address is blocked for 5 minutes.
+- Click **Edit** on a proposal and sign in. You stay signed in for 12 hours (HttpOnly cookie).
+- After 5 wrong passwords or sign-up codes, sign-in and sign-up from that address are blocked for 5 minutes. A wrong username and a wrong password give the same error.
 - Lines with open comments are highlighted, with a bubble in the margin:
   - Hover a bubble to read the comment; click it to open the thread in the panel.
   - While you type, the bubbles move with the text, and the panel's chips show the live position, for example `Line 9 (was 7)`.
@@ -230,12 +250,13 @@ $DC cp ./comments-backup.db backend:/data/comments.db && $DC restart backend
 
 ## Security note
 
-Reading and commenting are open: anyone who can reach the port can read proposals, post, resolve and delete comments. Only **editing proposals** needs the editor password. Keep the app on an internal network or VPN.
+Reading and commenting are open: anyone who can reach the port can read proposals, and post and resolve comments. **Changing proposals** (edit, upload) needs signing in. **Deleting** a proposal or a comment needs the account that created it. Keep the app on an internal network or VPN.
 
 Sign-in details:
-- The password is checked against a PBKDF2-SHA256 hash (600,000 iterations).
-- Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies. The signing key lives in the data volume and is mixed with the password hash, so changing the password invalidates every session.
-- The app is served over plain HTTP (see [HTTPS](#https)), so the editor password crosses the network unencrypted when someone signs in. That's acceptable only on a trusted internal network. The session cookie is marked `Secure` automatically if HTTPS is added in front.
+- Passwords, shared and per account, are checked against PBKDF2-SHA256 hashes (600,000 iterations). Account hashes live in the `users` table; plain passwords are never stored or logged.
+- Registering needs the editor password, so an account never grants more than that password already does.
+- Sessions are HMAC-signed, HttpOnly, `SameSite=Strict` cookies that carry the username. The signing key lives in the data volume and is mixed with the editor password hash, so changing that password invalidates every session. A session also ends when its account is removed.
+- The app is served over plain HTTP (see [HTTPS](#https)), so passwords cross the network unencrypted when someone signs in or registers. That's acceptable only on a trusted internal network. The session cookie is marked `Secure` automatically if HTTPS is added in front.
 - The sign-in lockout counts failures per client address. The app's nginx takes that address from the `X-Real-IP` header only when the request comes from loopback or a container bridge network (a proxy on the same host), so clients can't fake it.
 
 ## Troubleshooting
@@ -268,17 +289,19 @@ npm run dev
 
 | Method   | Path                          | Description                                               |
 |----------|-------------------------------|-----------------------------------------------------------|
-| `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, comment count, open threads) |
-| `GET`    | `/api/proposals/{path}`       | Metadata (`kind`, `version`, `writable`) for one proposal, plus the raw Markdown as `content` for `kind: "markdown"` |
+| `GET`    | `/api/proposals`              | List proposals (title, folder, excerpt, modified, `owner`, comment count, open threads) |
+| `GET`    | `/api/proposals/{path}`       | Metadata (`kind`, `version`, `writable`, `owner`: the uploading account or null) for one proposal, plus the raw Markdown as `content` for `kind: "markdown"` |
 | `POST`   | `/api/proposals`              | Upload a new `.md` or `.html` (editor only): `{filename, folder?, content}`. 201 returns the same shape as `GET /api/proposals/{path}`. 400 for an invalid name or folder, 403 if editing is off or the folder isn't writable, 409 if the name exists (body `{detail, path, version}`; replace it with `PUT` using that `version` as `base_version`) |
 | `PUT`    | `/api/proposals/{path}`       | Save (editor only): `{content, base_version, force?}`, Markdown or HTML. Returns 409 if the file changed since `base_version` |
+| `DELETE` | `/api/proposals/{path}`       | Delete (the uploading account only): moves the file to `.trash/<UTC time>/<path>` and its comments with it. Returns `{path, trashed_as}`; 401 if signed out, 403 for anyone but the owner, for proposals with no owner, or if the folder isn't writable |
 | `GET`    | `/api/render/{path}`          | An HTML proposal as a sandboxed page (`Content-Security-Policy: sandbox allow-scripts allow-popups allow-forms`, framed only by the app) |
 | `GET`    | `/api/assets/{path}`          | Files referenced from proposals (images and similar). Sent with `nosniff`, and sandboxed (`Content-Security-Policy: sandbox`) except PDFs, so an opened `.html`/`.svg` can't run script as the app |
 | `GET`    | `/api/comments?proposal=...`  | Threads for a proposal, each with its `replies`           |
 | `POST`   | `/api/comments`               | Start a thread `{proposal, author, body, quote?, line_start?, line_end?, version?}`, or reply with `{proposal, author, body, parent_id}`. An inline thread made against an old `version` gets 409 |
 | `PATCH`  | `/api/comments/{id}`          | Resolve or reopen a thread: `{resolved, by?}`             |
-| `DELETE` | `/api/comments/{id}`          | Delete a reply, or a thread together with its replies     |
-| `GET`    | `/api/auth`                   | `{enabled, signed_in}`                                    |
-| `POST`   | `/api/auth/login`             | `{password}`; sets the session cookie                     |
+| `DELETE` | `/api/comments/{id}`          | Delete your own reply, or your own thread with its replies. 401 unless signed in with an account, 403 if someone else posted it (or no account did), 409 if others replied to the thread |
+| `GET`    | `/api/auth`                   | `{enabled, signed_in, username}` (`username` is null for the shared password) |
+| `POST`   | `/api/auth/register`          | `{username, password, code}`, where `code` is the editor password. Creates the account and signs it in (201). 400 for a bad username (3–40 of letters, digits, `.` `_` `-`) or a password under 8 chars, 401 for a wrong code, 409 if the username is taken (case-insensitive) |
+| `POST`   | `/api/auth/login`             | `{username, password}`, or `{password}` alone for the editor password; sets the session cookie |
 | `POST`   | `/api/auth/logout`            | Clears the session cookie                                 |
 | `GET`    | `/api/health`                 | Health check                                              |

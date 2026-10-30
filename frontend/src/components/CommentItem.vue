@@ -1,5 +1,6 @@
 <script setup>
 import { fullDate, timeAgo } from '../format'
+import { session } from '../session'
 
 defineProps({ comment: { type: Object, required: true } })
 defineEmits(['delete'])
@@ -11,7 +12,15 @@ defineEmits(['delete'])
       <span class="avatar" aria-hidden="true">{{ comment.author.charAt(0).toUpperCase() }}</span>
       <strong>{{ comment.author }}</strong>
       <span class="muted" :title="fullDate(comment.created_at)">{{ timeAgo(comment.created_at) }}</span>
-      <button class="link-btn danger" title="Delete" @click="$emit('delete')">Delete</button>
+      <!-- Only the account that posted a comment can delete it. -->
+      <button
+        v-if="comment.owner && comment.owner === session.username"
+        class="link-btn danger"
+        title="Delete"
+        @click="$emit('delete')"
+      >
+        Delete
+      </button>
     </div>
     <p class="comment-body">{{ comment.body }}</p>
   </div>

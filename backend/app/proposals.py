@@ -164,6 +164,29 @@ def read_proposal(path: Path, text: str | None = None) -> dict:
     return result
 
 
+TRASH = ".trash"  # hidden, so never listed or served
+
+
+def trash_path(path: Path) -> str:
+    """Where move_to_trash puts a proposal: .trash/<UTC time>/<its relative path>."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{TRASH}/{stamp}/{path.relative_to(PROPOSALS_DIR).as_posix()}"
+
+
+def move_to_trash(path: Path, trashed: str) -> None:
+    target = PROPOSALS_DIR / trashed
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(path, target)
+    # Drop folders the move left empty, but never PROPOSALS_DIR itself.
+    for parent in path.parents:
+        if parent == PROPOSALS_DIR:
+            break
+        try:
+            parent.rmdir()
+        except OSError:  # not empty
+            break
+
+
 def write_proposal(path: Path, text: str, create: bool = False) -> None:
     """Atomically replace the file, keeping its permissions and line endings.
     With create=True the file must not exist; raises FileExistsError (atomic, never overwrites)."""

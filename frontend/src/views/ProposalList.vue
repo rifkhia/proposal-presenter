@@ -54,7 +54,11 @@ function onSignedIn() {
   next?.()
 }
 
-const startUpload = () => requireSignIn(() => uploader.value.open(), 'Uploading proposals requires the editor password.')
+// Set by ProposalView after deleting a proposal.
+const deleted = ref(history.state?.deleted || '')
+if (deleted.value) history.replaceState({ ...history.state, deleted: undefined }, '') // not again on reload
+
+const startUpload = () => requireSignIn(() => uploader.value.open(), 'Uploading proposals requires signing in.')
 const retryUpload = () => requireSignIn(() => uploader.value.submit(), 'Your session expired. Sign in again to upload.')
 
 onMounted(load)
@@ -79,6 +83,11 @@ onMounted(load)
         <button class="btn" @click="load" :disabled="loading" title="Reload list">Refresh</button>
         <button v-if="session.enabled" class="btn" @click="startUpload">Upload</button>
       </div>
+    </div>
+
+    <div v-if="deleted" class="notice success small save-notice">
+      Deleted "{{ deleted }}". It was moved to the trash folder on the server, with its comments.
+      <button class="link-btn" aria-label="Dismiss" @click="deleted = ''">Dismiss</button>
     </div>
 
     <p v-if="error" class="notice error">Could not load proposals: {{ error }}</p>
